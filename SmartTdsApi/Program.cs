@@ -122,6 +122,7 @@ app.MapAssesseeEndpoints();
 app.MapChallanEndpoints();
 app.MapMastersEndpoints();
 app.MapFirmDataEndpoints();
+app.MapAssesseeResStatusEndpoints();
 app.MapPayeeEndpoints();
 app.MapSalaryEndpoints();
 app.MapTdsEntryEndpoints();
