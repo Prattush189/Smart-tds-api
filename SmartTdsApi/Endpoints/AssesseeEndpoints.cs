@@ -1,6 +1,6 @@
+using System.Security.Claims;
 using Dapper;
 using SmartTdsApi.Data;
-using SmartTdsApi.Models;
 
 namespace SmartTdsApi.Endpoints;
 
@@ -10,29 +10,32 @@ public static class AssesseeEndpoints
     {
         var grp = app.MapGroup("/api/assessees").RequireAuthorization();
 
-        // List (shared master data — not year-scoped)
-        grp.MapGet("/", async (IDbConnectionFactory db, CancellationToken ct, int take = 200) =>
+        // List (full rows, scoped by JWT prodkey — desktop loads all at startup)
+        grp.MapGet("/", async (ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
+            var prodkey = principal.FindFirstValue("prodkey");
+            if (string.IsNullOrEmpty(prodkey))
+                return Results.Unauthorized();
+
             using var conn = await db.OpenMasterAsync(ct);
-            var sql = @"select subcode, tradename, firstname, lastname, pan,
-                               assesseestatus, mobileprimary, emailprimary
-                        from assessee
-                        where isdeleted = false
-                        order by tradename
-                        limit @take";
-            var rows = await conn.QueryAsync<AssesseeDto>(
-                new CommandDefinition(sql, new { take }, cancellationToken: ct));
+            const string sql = @"select * from assessee
+                                 where prodkey = @pk and isdeleted = false
+                                 order by tradename";
+            var rows = await conn.QueryAsync(
+                new CommandDefinition(sql, new { pk = prodkey }, cancellationToken: ct));
             return Results.Ok(rows);
         }).WithName("ListAssessees");
 
-        grp.MapGet("/{subCode:int}", async (int subCode, IDbConnectionFactory db, CancellationToken ct) =>
+        grp.MapGet("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
+            var prodkey = principal.FindFirstValue("prodkey");
+            if (string.IsNullOrEmpty(prodkey))
+                return Results.Unauthorized();
+
             using var conn = await db.OpenMasterAsync(ct);
-            var sql = @"select subcode, tradename, firstname, lastname, pan,
-                               assesseestatus, mobileprimary, emailprimary
-                        from assessee where subcode = @subCode and isdeleted = false";
-            var row = await conn.QueryFirstOrDefaultAsync<AssesseeDto>(
-                new CommandDefinition(sql, new { subCode }, cancellationToken: ct));
+            const string sql = "select * from assessee where subcode = @subCode and prodkey = @pk";
+            var row = await conn.QueryFirstOrDefaultAsync(
+                new CommandDefinition(sql, new { subCode, pk = prodkey }, cancellationToken: ct));
             return row is null ? Results.NotFound() : Results.Ok(row);
         }).WithName("GetAssessee");
     }

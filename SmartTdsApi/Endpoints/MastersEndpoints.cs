@@ -257,7 +257,7 @@ public static class MastersEndpoints
             return Results.Ok(rows);
         }).WithName("ListSubDistricts");
 
-        // GET /api/masters/pincode?pincode=
+        // GET /api/masters/pincode?pincode=  (no pincode -> ALL rows; desktop loads all at startup)
         grp.MapGet("/pincode", async (IDbConnectionFactory db, CancellationToken ct, double? pincode) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
@@ -265,19 +265,15 @@ public static class MastersEndpoints
             object? param;
             if (pincode.HasValue)
             {
-                sql = @"select id, pincode, districtcode, statecode, subdistrictcode,
-                               localitycode, postofficecode
-                        from pincode where pincode = @pincode";
+                sql = "select * from pincode where pincode = @pincode";
                 param = new { pincode = pincode.Value };
             }
             else
             {
-                sql = @"select id, pincode, districtcode, statecode, subdistrictcode,
-                               localitycode, postofficecode
-                        from pincode";
+                sql = "select * from pincode";
                 param = null;
             }
-            var rows = await conn.QueryAsync<PincodeDto>(
+            var rows = await conn.QueryAsync(
                 new CommandDefinition(sql, param, cancellationToken: ct));
             return Results.Ok(rows);
         }).WithName("LookupPincode");

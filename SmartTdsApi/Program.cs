@@ -121,6 +121,7 @@ app.MapAuthEndpoints();
 app.MapAssesseeEndpoints();
 app.MapChallanEndpoints();
 app.MapMastersEndpoints();
+app.MapFirmDataEndpoints();
 app.MapPayeeEndpoints();
 app.MapSalaryEndpoints();
 app.MapTdsEntryEndpoints();
