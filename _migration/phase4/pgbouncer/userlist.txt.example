@@ -1,0 +1,26 @@
+; =============================================================================
+; PgBouncer userlist — auth_file for SmartTds  (copy to userlist.txt)
+; -----------------------------------------------------------------------------
+; Format:  "username" "password-or-hash"
+;
+; With auth_type = scram-sha-256 (see pgbouncer.ini) store the SCRAM verifier
+; EXACTLY as PostgreSQL stores it, NOT the plaintext password. Get it with:
+;
+;   SELECT rolname, rolpassword
+;   FROM pg_authid
+;   WHERE rolname IN ('smarttds_app','pgb_admin','pgb_stats','monitoring');
+;
+; Copy the full 'SCRAM-SHA-256$...' string verbatim into the second column.
+; Keep this file chmod 600, owned by the pgbouncer user. NEVER commit the real
+; one — only this .example with CHANGE_ME placeholders.
+; =============================================================================
+
+; --- Application role used by the API nodes (per-year + master DBs) ---
+"smarttds_app"  "SCRAM-SHA-256$4096:CHANGE_ME_salt$CHANGE_ME_storedkey:CHANGE_ME_serverkey"
+
+; --- PgBouncer console admin (RELOAD / PAUSE / SHOW) ---
+"pgb_admin"     "SCRAM-SHA-256$4096:CHANGE_ME_salt$CHANGE_ME_storedkey:CHANGE_ME_serverkey"
+
+; --- Read-only stats users for monitoring (SHOW POOLS/STATS) ---
+"pgb_stats"     "SCRAM-SHA-256$4096:CHANGE_ME_salt$CHANGE_ME_storedkey:CHANGE_ME_serverkey"
+"monitoring"    "SCRAM-SHA-256$4096:CHANGE_ME_salt$CHANGE_ME_storedkey:CHANGE_ME_serverkey"

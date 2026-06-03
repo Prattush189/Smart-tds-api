@@ -1,0 +1,103 @@
+# =============================================================================
+# Patroni configuration — NODE 2 (smarttds-pg2 / intended STANDBY at bootstrap)
+# SmartTds PostgreSQL 16 HA cluster.  Deploy at /etc/patroni/patroni.yml
+# -----------------------------------------------------------------------------
+# IDENTICAL to node1 EXCEPT: name, restapi.connect_address,
+# postgresql.connect_address. The cluster-wide `bootstrap:` block is only read
+# from whichever node initialises the DCS first; it is kept here verbatim so the
+# two files are interchangeable and the standby can become primary unchanged.
+# =============================================================================
+
+scope: smarttds
+namespace: /service/
+name: smarttds-pg2          # <-- differs from node1
+
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 10.0.0.12:8008      # CHANGE_ME -> NODE 2 IP  (differs from node1)
+  authentication:
+    username: patroni
+    password: CHANGE_ME_restapi
+
+etcd3:
+  hosts:
+    - 10.0.0.21:2379       # CHANGE_ME etcd node 1
+    - 10.0.0.22:2379       # CHANGE_ME etcd node 2
+    - 10.0.0.23:2379       # CHANGE_ME etcd node 3
+
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    synchronous_mode: true
+    synchronous_mode_strict: false
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 2048MB
+        synchronous_commit: "on"
+        wal_log_hints: "on"
+        archive_mode: "on"
+        archive_command: 'pgbackrest --stanza=smarttds archive-push %p'
+        shared_buffers: 8GB
+        effective_cache_size: 24GB
+        work_mem: 16MB
+        maintenance_work_mem: 1GB
+        max_connections: 200
+        checkpoint_completion_target: 0.9
+        max_wal_size: 8GB
+        min_wal_size: 2GB
+        random_page_cost: 1.1
+        effective_io_concurrency: 200
+        max_worker_processes: 8
+        max_parallel_workers: 8
+        max_parallel_workers_per_gather: 4
+        track_io_timing: "on"
+        log_min_duration_statement: 1000
+        log_checkpoints: "on"
+        log_lock_waits: "on"
+  pg_hba:
+    - local   all             all                                   trust
+    - host    all             all                127.0.0.1/32        scram-sha-256
+    - host    all             all                10.0.0.0/24         scram-sha-256   # CHANGE_ME
+    - host    replication     replicator         10.0.0.0/24         scram-sha-256   # CHANGE_ME
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 10.0.0.12:5432      # CHANGE_ME -> NODE 2 IP  (differs from node1)
+  data_dir: /var/lib/postgresql/16/main
+  bin_dir: /usr/lib/postgresql/16/bin
+  pgpass: /tmp/pgpass
+  authentication:
+    superuser:
+      username: postgres
+      password: CHANGE_ME_superuser
+    replication:
+      username: replicator
+      password: CHANGE_ME_replicator
+    rewind:
+      username: rewind_user
+      password: CHANGE_ME_rewind
+  parameters:
+    unix_socket_directories: '/var/run/postgresql'
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false
+
+watchdog:
+  mode: automatic
+  device: /dev/watchdog
+  safety_margin: 5

@@ -1,0 +1,18 @@
+[Unit]
+Description=SmartTds API (ASP.NET Core)
+After=network.target postgresql.service
+
+[Service]
+WorkingDirectory=/www/wwwroot/smarttds-api
+ExecStart=/www/wwwroot/smarttds-api/SmartTdsApi
+EnvironmentFile=/www/wwwroot/smarttds-api/smarttds.env
+Restart=always
+RestartSec=5
+# self-contained .NET on minimal Linux sometimes lacks ICU; uncomment if it
+# fails to start with a globalization/ICU error:
+# Environment=DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+KillSignal=SIGINT
+SyslogIdentifier=smarttds-api
+
+[Install]
+WantedBy=multi-user.target

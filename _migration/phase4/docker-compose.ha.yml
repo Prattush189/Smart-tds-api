@@ -1,0 +1,231 @@
+# =============================================================================
+# SmartTds — LOCAL High-Availability simulation (Phase 4)
+# =============================================================================
+# Purpose: a runnable, self-contained replica of the PRODUCTION HA topology so
+# operators can rehearse failover, connection-pooling and read/write split on a
+# laptop before touching real servers.
+#
+# Topology produced by this file:
+#
+#   etcd  (DCS / leader election for Patroni)
+#     |
+#   patroni1  <----- streaming replication ----->  patroni2
+#   (Postgres 16, one is leader, one is replica; auto-failover via Patroni)
+#     |                                              |
+#   pgbouncer (transaction pooling)
+#     |
+#   haproxy   (RW listener -> current leader, RO listener -> replicas,
+#              plus an HTTP front for the two API nodes)
+#     |
+#   api1, api2 (ASP.NET Core SmartTds API — stateless, JWT)
+#
+# -----------------------------------------------------------------------------
+# IMAGE TAGS YOU MUST VERIFY before `docker compose up` (see README note at end):
+#   * ghcr.io/zalando/spilo-16:3.2-p2   -> tag may have moved; check ghcr.io/zalando/spilo-16 tags.
+#   * gcr.io/etcd-development/etcd:v3.5.13 -> pin to a current 3.5.x.
+#   * bitnami/pgbouncer:1.22.1          -> verify on Docker Hub.
+#   * haproxy:2.9                       -> 2.9 LTS; bump if you standardise elsewhere.
+#   * The api image (smarttds/api:local) must be BUILT locally first, or comment
+#     the api1/api2 services out for a pure DB-HA rehearsal.
+# -----------------------------------------------------------------------------
+# Spilo bundles PostgreSQL 16 + Patroni + wal-g and reads its Patroni config from
+# environment variables. We keep secrets as CHANGE_ME — set them in a .env file.
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # etcd — Distributed Configuration Store used by Patroni for leader election.
+  # Single node here for simplicity; PRODUCTION must run a 3-node etcd quorum.
+  # ---------------------------------------------------------------------------
+  etcd:
+    image: gcr.io/etcd-development/etcd:v3.5.13   # VERIFY TAG
+    container_name: smarttds-etcd
+    command:
+      - etcd
+      - --name=etcd0
+      - --data-dir=/etcd-data
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-cluster=etcd0=http://etcd:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=smarttds-etcd-token
+    volumes:
+      - etcd_data:/etcd-data
+    networks: [ha]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  # ---------------------------------------------------------------------------
+  # patroni1 / patroni2 — PostgreSQL 16 nodes managed by Patroni (Spilo image).
+  # One becomes the synchronous leader; the other a synchronous standby giving
+  # ZERO-DATA-LOSS failover (synchronous_commit=on, synchronous_mode=true).
+  # Patroni REST API is exposed on :8008 — HAProxy uses it to find the leader.
+  # ---------------------------------------------------------------------------
+  patroni1:
+    image: ghcr.io/zalando/spilo-16:3.2-p2        # VERIFY TAG (Spilo == PG16+Patroni)
+    container_name: smarttds-patroni1
+    hostname: patroni1
+    environment:
+      # --- cluster identity / DCS ---
+      SCOPE: smarttds
+      PATRONI_NAME: patroni1
+      PATRONI_ETCD3_HOSTS: "'etcd:2379'"
+      ETCD3_HOSTS: "etcd:2379"
+      # --- listen addresses ---
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni1:8008
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni1:5432
+      PGVERSION: "16"
+      # --- credentials (CHANGE_ME via .env) ---
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:-CHANGE_ME_superuser}
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-CHANGE_ME_replicator}
+      PATRONI_admin_PASSWORD: ${ADMIN_PASSWORD:-CHANGE_ME_admin}
+      PATRONI_admin_OPTIONS: createrole,createdb
+      # --- synchronous replication for zero data loss ---
+      # (Spilo applies these into the Patroni bootstrap DCS configuration.)
+      PATRONI_POSTGRESQL_PARAMETERS_synchronous_commit: "on"
+    volumes:
+      - patroni1_data:/home/postgres/pgdata
+    networks: [ha]
+    depends_on:
+      etcd:
+        condition: service_healthy
+    ports:
+      - "5433:5432"   # direct node access for debugging only
+      - "8008:8008"   # Patroni REST API
+
+  patroni2:
+    image: ghcr.io/zalando/spilo-16:3.2-p2        # VERIFY TAG
+    container_name: smarttds-patroni2
+    hostname: patroni2
+    environment:
+      SCOPE: smarttds
+      PATRONI_NAME: patroni2
+      PATRONI_ETCD3_HOSTS: "'etcd:2379'"
+      ETCD3_HOSTS: "etcd:2379"
+      PATRONI_RESTAPI_LISTEN: 0.0.0.0:8008
+      PATRONI_RESTAPI_CONNECT_ADDRESS: patroni2:8008
+      PATRONI_POSTGRESQL_LISTEN: 0.0.0.0:5432
+      PATRONI_POSTGRESQL_CONNECT_ADDRESS: patroni2:5432
+      PGVERSION: "16"
+      PATRONI_SUPERUSER_USERNAME: postgres
+      PATRONI_SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:-CHANGE_ME_superuser}
+      PATRONI_REPLICATION_USERNAME: replicator
+      PATRONI_REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:-CHANGE_ME_replicator}
+      PATRONI_admin_PASSWORD: ${ADMIN_PASSWORD:-CHANGE_ME_admin}
+      PATRONI_admin_OPTIONS: createrole,createdb
+      PATRONI_POSTGRESQL_PARAMETERS_synchronous_commit: "on"
+    volumes:
+      - patroni2_data:/home/postgres/pgdata
+    networks: [ha]
+    depends_on:
+      etcd:
+        condition: service_healthy
+    ports:
+      - "5434:5432"
+      - "8009:8008"
+
+  # ---------------------------------------------------------------------------
+  # PgBouncer — transaction-mode pooling. Connects to HAProxy's RW port so it
+  # always reaches the current leader (it does NOT need to know which node is
+  # leader). See pgbouncer/pgbouncer.ini for pool sizing per (user,db).
+  # ---------------------------------------------------------------------------
+  pgbouncer:
+    image: bitnami/pgbouncer:1.22.1               # VERIFY TAG
+    container_name: smarttds-pgbouncer
+    environment:
+      # Bitnami can self-generate a config, but we mount our own to keep the
+      # realistic per-database pool sizing. POSTGRESQL_HOST points at HAProxy RW.
+      PGBOUNCER_DATABASE: "*"
+      POSTGRESQL_HOST: haproxy
+      POSTGRESQL_PORT_NUMBER: "5000"
+    volumes:
+      - ./pgbouncer/pgbouncer.ini:/opt/bitnami/pgbouncer/conf/pgbouncer.ini:ro
+      - ./pgbouncer/userlist.txt:/opt/bitnami/pgbouncer/conf/userlist.txt:ro
+    networks: [ha]
+    depends_on: [haproxy]
+    ports:
+      - "6432:6432"
+
+  # ---------------------------------------------------------------------------
+  # HAProxy — three jobs:
+  #   :5000  Postgres RW  -> current Patroni leader (uses /leader REST check)
+  #   :5001  Postgres RO  -> any replica           (uses /replica REST check)
+  #   :8080  HTTP         -> api1 + api2 (/health checked)
+  #   :7000  stats UI
+  # Config in haproxy/haproxy.cfg.
+  # ---------------------------------------------------------------------------
+  haproxy:
+    image: haproxy:2.9                            # VERIFY TAG
+    container_name: smarttds-haproxy
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks: [ha]
+    depends_on: [patroni1, patroni2]
+    ports:
+      - "5000:5000"   # RW (write traffic / pgbouncer upstream)
+      - "5001:5001"   # RO (read replicas)
+      - "8080:8080"   # API front
+      - "7000:7000"   # stats
+
+  # ---------------------------------------------------------------------------
+  # API nodes — stateless ASP.NET Core SmartTds API (JWT). Two instances so
+  # HAProxy can round-robin and survive one going down. They talk to PgBouncer.
+  # Build smarttds/api:local from SmartTdsApi/ first, or comment these out.
+  # ---------------------------------------------------------------------------
+  api1:
+    image: smarttds/api:local                     # BUILD LOCALLY or comment out
+    container_name: smarttds-api1
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      # App routes per-request to the year DB; all go through PgBouncer.
+      ConnectionStrings__Pg: "Host=pgbouncer;Port=6432;Username=smarttds_app;Password=${APP_PASSWORD:-CHANGE_ME_app};Database=masterdbtds;Pooling=false"
+    networks: [ha]
+    depends_on: [pgbouncer]
+
+  api2:
+    image: smarttds/api:local                     # BUILD LOCALLY or comment out
+    container_name: smarttds-api2
+    environment:
+      ASPNETCORE_URLS: http://0.0.0.0:8080
+      ConnectionStrings__Pg: "Host=pgbouncer;Port=6432;Username=smarttds_app;Password=${APP_PASSWORD:-CHANGE_ME_app};Database=masterdbtds;Pooling=false"
+    networks: [ha]
+    depends_on: [pgbouncer]
+
+networks:
+  ha:
+    driver: bridge
+
+volumes:
+  etcd_data:
+  patroni1_data:
+  patroni2_data:
+
+# =============================================================================
+# README NOTE — running this locally
+# -----------------------------------------------------------------------------
+# 1. Create a .env beside this file (NEVER commit it):
+#       SUPERUSER_PASSWORD=...      REPLICATION_PASSWORD=...
+#       ADMIN_PASSWORD=...          APP_PASSWORD=...
+# 2. VERIFY every image tag marked "VERIFY TAG" — registries retag/expire.
+#    Quick check:  docker pull ghcr.io/zalando/spilo-16:3.2-p2
+# 3. Build the API image, or comment out api1/api2:
+#       docker build -t smarttds/api:local ../../SmartTdsApi
+# 4. docker compose -f docker-compose.ha.yml up -d
+# 5. Watch leader election:  docker exec smarttds-patroni1 patronictl -c /home/postgres/postgres.yml list
+# 6. Connect through the pool:  psql "host=localhost port=6432 user=smarttds_app dbname=smarttds26"
+# 7. Test failover:  docker stop smarttds-patroni1   (patroni2 should be promoted)
+#
+# This compose file uses Spilo (env-driven Patroni). The hand-written Patroni
+# YAML in ../patroni/ documents the EXACT production parameters and is what you
+# deploy on bare VMs/systemd; Spilo here is purely for the laptop rehearsal.
+# =============================================================================

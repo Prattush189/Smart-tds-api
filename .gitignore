@@ -1,0 +1,26 @@
+# =====================================================================
+# This git repo holds ONLY the server-side parts of SmartTds:
+#   - SmartTdsApi/   (the ASP.NET Core API)
+#   - _migration/    (PostgreSQL schema/seed/licensing + deploy scripts)
+# The WinForms desktop and the other solution projects are intentionally
+# NOT tracked here (they stay in the full SVN working copy).
+# =====================================================================
+
+# ignore everything at the root...
+/*
+# ...except these:
+!/.gitignore
+!/README.md
+!/SmartTdsApi/
+!/_migration/
+
+# build output & temp (inside the kept folders)
+**/bin/
+**/obj/
+**/publish_linux/
+*.zip
+
+# secrets & generated artifacts — NEVER commit
+**/smarttds.env
+**/*.local.json
+_migration/tools/_*.sql

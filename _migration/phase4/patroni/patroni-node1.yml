@@ -1,0 +1,130 @@
+# =============================================================================
+# Patroni configuration — NODE 1 (smarttds-pg1 / intended PRIMARY at bootstrap)
+# SmartTds PostgreSQL 16 HA cluster.  Deploy at /etc/patroni/patroni.yml
+# Run as:  patroni /etc/patroni/patroni.yml   (systemd unit recommended)
+# -----------------------------------------------------------------------------
+# This is the PRODUCTION-grade config for bare VMs (8 vCPU / 32 GB / NVMe).
+# node2 file is identical except `name`, `restapi`, and `postgresql` addresses.
+# Secrets are CHANGE_ME — inject via a secrets manager / env, do NOT commit real ones.
+# =============================================================================
+
+scope: smarttds            # cluster name — MUST match on every node
+namespace: /service/        # key prefix inside etcd
+name: smarttds-pg1          # UNIQUE per node
+
+# --- Patroni REST API: HAProxy polls /leader & /replica here for routing ---
+restapi:
+  listen: 0.0.0.0:8008
+  connect_address: 10.0.0.11:8008      # CHANGE_ME -> this node's reachable IP
+  # Protect mutating endpoints (switchover/restart) with basic auth:
+  authentication:
+    username: patroni
+    password: CHANGE_ME_restapi
+
+# --- Distributed Configuration Store: 3-node etcd quorum in production ---
+etcd3:
+  hosts:
+    - 10.0.0.21:2379       # CHANGE_ME etcd node 1
+    - 10.0.0.22:2379       # CHANGE_ME etcd node 2
+    - 10.0.0.23:2379       # CHANGE_ME etcd node 3
+
+# =============================================================================
+# Cluster-wide bootstrap config. Written to the DCS ONCE at first init; after
+# that, edit live via `patronictl edit-config smarttds` (NOT this file).
+# =============================================================================
+bootstrap:
+  dcs:
+    ttl: 30                      # leader lease seconds
+    loop_wait: 10                # Patroni HA loop interval
+    retry_timeout: 10            # DCS/PG operation retry budget
+    maximum_lag_on_failover: 1048576   # 1 MB: refuse to promote a too-stale replica
+
+    # ---- ZERO DATA LOSS: synchronous replication ----
+    synchronous_mode: true       # commits wait for a synchronous standby
+    synchronous_mode_strict: false  # if no sync standby, allow primary to continue
+                                    # (set TRUE only if you prefer to BLOCK writes
+                                    #  rather than risk async commit — RPO=0 strict).
+
+    postgresql:
+      use_pg_rewind: true        # fast re-sync of a former primary after failover
+      use_slots: true            # replication slots prevent WAL deletion gaps
+      parameters:
+        # --- replication / WAL ---
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 2048MB           # safety WAL buffer (slots are primary guard)
+        synchronous_commit: "on"        # durable commits; pairs with synchronous_mode
+        wal_log_hints: "on"             # REQUIRED for pg_rewind
+        archive_mode: "on"
+        archive_command: 'pgbackrest --stanza=smarttds archive-push %p'  # see backup/
+        # --- memory (8 vCPU / 32 GB) — full set in postgres/postgresql.tuned.conf ---
+        shared_buffers: 8GB
+        effective_cache_size: 24GB
+        work_mem: 16MB
+        maintenance_work_mem: 1GB
+        max_connections: 200
+        # --- checkpoint / IO ---
+        checkpoint_completion_target: 0.9
+        max_wal_size: 8GB
+        min_wal_size: 2GB
+        random_page_cost: 1.1           # NVMe
+        effective_io_concurrency: 200   # NVMe
+        # --- planner / parallelism (8 cores) ---
+        max_worker_processes: 8
+        max_parallel_workers: 8
+        max_parallel_workers_per_gather: 4
+        # --- observability ---
+        track_io_timing: "on"
+        log_min_duration_statement: 1000   # log >1s queries
+        log_checkpoints: "on"
+        log_lock_waits: "on"
+
+  # ---- pg_hba written at bootstrap (tighten CIDRs to your VPC!) ----
+  pg_hba:
+    - local   all             all                                   trust
+    - host    all             all                127.0.0.1/32        scram-sha-256
+    - host    all             all                10.0.0.0/24         scram-sha-256   # app/pgbouncer subnet — CHANGE_ME
+    - host    replication     replicator         10.0.0.0/24         scram-sha-256   # standby subnet — CHANGE_ME
+
+  initdb:
+    - encoding: UTF8
+    - data-checksums          # detect silent corruption; cannot be added later
+
+# =============================================================================
+# Per-NODE PostgreSQL settings.
+# =============================================================================
+postgresql:
+  listen: 0.0.0.0:5432
+  connect_address: 10.0.0.11:5432      # CHANGE_ME -> this node's IP
+  data_dir: /var/lib/postgresql/16/main
+  bin_dir: /usr/lib/postgresql/16/bin
+  pgpass: /tmp/pgpass
+
+  authentication:
+    superuser:
+      username: postgres
+      password: CHANGE_ME_superuser
+    replication:
+      username: replicator
+      password: CHANGE_ME_replicator
+    rewind:
+      username: rewind_user
+      password: CHANGE_ME_rewind
+
+  parameters:
+    # node-local overrides (most live in the DCS block above)
+    unix_socket_directories: '/var/run/postgresql'
+
+# --- tags: behaviour of THIS node in the cluster ---
+tags:
+  nofailover: false        # eligible to become leader
+  noloadbalance: false     # eligible for read load-balancing
+  clonefrom: false
+  nosync: false            # eligible to be the synchronous standby
+
+watchdog:
+  mode: automatic          # use /dev/watchdog if available (prevents split-brain)
+  device: /dev/watchdog
+  safety_margin: 5
