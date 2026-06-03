@@ -37,7 +37,7 @@ if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $pub "*") -DestinationPath $zip
 
 Write-Host "== upload (scp) ==" -ForegroundColor Cyan
-scp -P $Port $zip "${VpsUser}@${VpsHost}:/tmp/smarttds-publish.zip"
+scp -P $Port -o HostKeyAlgorithms=+ssh-rsa $zip "${VpsUser}@${VpsHost}:/tmp/smarttds-publish.zip"
 if ($LASTEXITCODE -ne 0) { throw "scp failed" }
 
 Write-Host "== remote: unzip + restart + health ==" -ForegroundColor Cyan
@@ -48,7 +48,7 @@ $remoteCmd = "systemctl stop $Service; " +
              "systemctl start $Service; sleep 1; " +
              "rm -f /tmp/smarttds-publish.zip; " +
              "echo -n 'health: '; curl -s http://127.0.0.1:5080/health; echo"
-ssh -p $Port "${VpsUser}@${VpsHost}" $remoteCmd
+ssh -p $Port -o HostKeyAlgorithms=+ssh-rsa "${VpsUser}@${VpsHost}" $remoteCmd
 if ($LASTEXITCODE -ne 0) { throw "remote deploy failed" }
 
 Write-Host "`nDONE. API redeployed to https://api.smartbizin.com" -ForegroundColor Green
