@@ -75,6 +75,15 @@ public sealed record AyMasterDto
     public string? UpdCase94E { get; init; }
 }
 
+// Output shape with DateTime fields (parsed from the dd/MM/yyyy varchars) so the desktop's
+// MasterEntities.AyMaster (DateTime properties) deserializes correctly. Concrete type =
+// System.Text.Json serializes all properties (a List<object> of anonymous types would not).
+public sealed record AyMasterOut(
+    int Id, int AyId, string Name, DateTime StartDt, DateTime EndDt,
+    DateTime NonBusInc, DateTime BusInc, DateTime AuditCase, DateTime CompCase, DateTime Case94E,
+    DateTime AdvInst1, DateTime AdvInst2, DateTime AdvInst3, DateTime AdvInst4,
+    DateTime UpdNonBusInc, DateTime UpdBusInc, DateTime UpdAuditCase, DateTime UpdCompCase, DateTime UpdCase94E);
+
 public sealed record TdsNatureDto
 {
     public int Code { get; init; }
@@ -281,15 +290,26 @@ public static class MastersEndpoints
         // GET /api/masters/aymaster
         grp.MapGet("/aymaster", async (IDbConnectionFactory db, CancellationToken ct) =>
         {
+            // dates are stored as dd/MM/yyyy varchar; parse to DateTime so the desktop's
+            // AyMaster (DateTime fields) deserializes without a format error.
+            static DateTime D(string s) => DateTime.TryParseExact(s, "dd/MM/yyyy",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var dt) ? dt : DateTime.MinValue;
+
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = @"select id, ayid, name, startdt, enddt,
                                         nonbusinc, businc, auditcase, compcase, case94e,
                                         advinst1, advinst2, advinst3, advinst4,
                                         updnonbusinc, updbusinc, updauditcase, updcompcase, updcase94e
                                  from aymaster";
-            var rows = await conn.QueryAsync<AyMasterDto>(
-                new CommandDefinition(sql, cancellationToken: ct));
-            return Results.Ok(rows);
+            var rows = await conn.QueryAsync<AyMasterDto>(new CommandDefinition(sql, cancellationToken: ct));
+            var outp = new List<AyMasterOut>();
+            foreach (var r in rows)
+                outp.Add(new AyMasterOut(r.Id, r.AyId, r.Name,
+                    D(r.StartDt), D(r.EndDt), D(r.NonBusInc), D(r.BusInc), D(r.AuditCase),
+                    D(r.CompCase), D(r.Case94E), D(r.AdvInst1), D(r.AdvInst2), D(r.AdvInst3), D(r.AdvInst4),
+                    D(r.UpdNonBusInc), D(r.UpdBusInc), D(r.UpdAuditCase), D(r.UpdCompCase), D(r.UpdCase94E)));
+            return Results.Ok(outp);
         }).WithName("ListAyMaster");
 
         // GET /api/masters/tdsnatures
