@@ -55,9 +55,12 @@ Start-Transcript -Path (Join-Path $logDir "install-local.log") -Append | Out-Nul
 try {
   if ($Uninstall) {
     Say "Removing SmartTds services..."
-    & (Join-Path $here "install-service.ps1") -PgBin $pgBin -Uninstall
+    # Best-effort: an uninstall custom action must NEVER fail (or it blocks removal).
+    try { & (Join-Path $here "install-service.ps1") -PgBin $pgBin -Uninstall }
+    catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
     Say "Done. (PostgreSQL data left intact under $dataDir)" "Green"
-    return
+    Stop-Transcript | Out-Null
+    exit 0
   }
 
   # 1) provision DB (creates cluster on :PgPort, the 3 DBs, admin user; patches API appsettings.Local.json)

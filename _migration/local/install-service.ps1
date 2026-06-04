@@ -26,21 +26,31 @@ param(
   [switch] $LanFirewall,                             # open the API port for the office LAN
   [switch] $Uninstall
 )
-$ErrorActionPreference = "Stop"
+# Native tools (sc.exe / pg_ctl / netsh) write warnings to stderr; under EAP=Stop
+# PowerShell 5.1 turns that into a TERMINATING NativeCommandError. Use Continue so
+# best-effort cleanup never aborts; install-path failures use explicit `throw`
+# (which terminates regardless of EAP) + $LASTEXITCODE checks.
+$ErrorActionPreference = "Continue"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
 
 function Remove-Svc($name){
-  $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
-  if ($svc){ Say "Removing service $name"; if ($svc.Status -ne 'Stopped'){ Stop-Service $name -Force -ErrorAction SilentlyContinue }
-    & sc.exe delete $name | Out-Null }
+  try {
+    $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+    if ($svc){ Say "Removing service $name"; if ($svc.Status -ne 'Stopped'){ Stop-Service $name -Force -ErrorAction SilentlyContinue }
+      & sc.exe delete $name | Out-Null }
+  } catch { Say ("  (could not remove $name: " + $_.Exception.Message + ")") "Yellow" }
 }
 
 if ($Uninstall) {
-  Remove-Svc $ApiServiceName
-  if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
-  Remove-Svc $PgServiceName
-  & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
-  Say "Uninstalled." "Green"; return
+  # Best-effort: never let cleanup failures block an uninstall.
+  try {
+    Remove-Svc $ApiServiceName
+    if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
+    Remove-Svc $PgServiceName
+    & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
+    Say "Uninstalled." "Green"
+  } catch { Say ("uninstall cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
+  exit 0
 }
 
 # --- PostgreSQL service (so the DB survives reboot) ---
