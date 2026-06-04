@@ -19,7 +19,7 @@
   EXAMPLES
     # first install: extract bundled PG, init a private cluster on :5433, load everything
     pwsh _migration\local\provision-local.ps1 -PgZip C:\dl\postgresql-16-binaries.zip `
-         -ApiDir _migration\local\dist\api -AdminPwd 'Admin@123'
+         -ApiDir _migration\local\dist\api -AdminPwd 'admin'
 
     # re-run against an already-extracted PG (idempotent; preserves existing data)
     pwsh _migration\local\provision-local.ps1 -PgBin C:\ProgramData\SmartTds\pgsql\bin
