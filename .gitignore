@@ -24,3 +24,7 @@
 **/smarttds.env
 **/*.local.json
 _migration/tools/_*.sql
+
+# local-mode build output (never commit)
+_migration/local/dist/
+**/publish_linux/
