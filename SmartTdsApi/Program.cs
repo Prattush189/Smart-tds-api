@@ -11,12 +11,24 @@ using SmartTdsApi.Endpoints;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ---- LOCAL MODE: allow running as a Windows Service (no-op on Linux/console).
+// When launched by Windows SCM, this also fixes ContentRoot to the install dir
+// so appsettings*.json resolve. On the Linux VPS (systemd) this does nothing. ----
+builder.Host.UseWindowsService();
+
 // ---- Options (env vars override, e.g. Db__Password, Jwt__Key) ----
 builder.Services.Configure<DbOptions>(builder.Configuration.GetSection("Db"));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
 builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
 builder.Services.AddSingleton<JwtTokenService>();
+
+// Licensing: licence keys are validated against the legacy smartbizin ServiceUL.svc
+// (Online = cloud + seat cap; Local = LAN server + unlimited seats). HttpClient does
+// the outbound SOAP call; LicenceService caches results + holds this server's machine-id.
+builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("Licensing"));
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<LicenceService>();
 
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
 
