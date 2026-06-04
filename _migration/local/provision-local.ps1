@@ -116,17 +116,21 @@ if (-not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
 $status = Run-Native $pgctl @("-D",$dataDir,"status")
 if ($status.Out -notmatch "server is running") {
   Say "Starting PostgreSQL on 127.0.0.1:$Port"
-  # IMPORTANT: launch via Start-Process (NOT '& ... 2>&1'). pg_ctl spawns the long-running
-  # postgres server, which would inherit a captured pipe handle and hang PowerShell forever.
-  # Start-Process -Wait only waits for pg_ctl itself; postgres keeps running detached.
-  $soOut = Join-Path $InstallRoot "pgctl_start.out"
-  $soErr = Join-Path $InstallRoot "pgctl_start.err"
-  $argLine = "-D `"$dataDir`" -l `"$logFile`" -w -t 60 -o `"-p $Port`" start"
-  $proc = Start-Process -FilePath $pgctl -ArgumentList $argLine -NoNewWindow -Wait -PassThru `
-            -RedirectStandardOutput $soOut -RedirectStandardError $soErr
-  if ($proc.ExitCode -ne 0) {
-    Write-Host (Get-Content $soOut,$soErr,$logFile -Tail 40 -ErrorAction SilentlyContinue) -ForegroundColor Red
-    throw "pg_ctl start failed (exit $($proc.ExitCode)) - see $logFile"
+  # CRITICAL: wait on the pg_ctl PROCESS, not its output streams. pg_ctl spawns the
+  # long-running postgres server which inherits any redirected handle (pipe OR
+  # Start-Process redirect file) and keeps it open forever -> the parent hangs.
+  # Using raw Process with NO redirection + WaitForExit waits only on pg_ctl's exit;
+  # postgres (the grandchild) keeps running detached. pg_ctl logs to $logFile via -l.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName        = $pgctl
+  $psi.Arguments       = "-D `"$dataDir`" -l `"$logFile`" -w -t 60 -o `"-p $Port`" start"
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow  = $true
+  $pg = [System.Diagnostics.Process]::Start($psi)
+  if (-not $pg.WaitForExit(90000)) { try { $pg.Kill() } catch {}; throw "pg_ctl start timed out (90s)" }
+  if ($pg.ExitCode -ne 0) {
+    Write-Host (Get-Content $logFile -Tail 40 -ErrorAction SilentlyContinue) -ForegroundColor Red
+    throw "pg_ctl start failed (exit $($pg.ExitCode)) - see $logFile"
   }
   Say "PostgreSQL started."
 } else {
