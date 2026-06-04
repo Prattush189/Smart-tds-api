@@ -94,9 +94,9 @@ if (-not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
   Remove-Item $pwfile -Force -ErrorAction SilentlyContinue
   if ($r.Code -ne 0) { Write-Host $r.Out -ForegroundColor Red; throw "initdb failed" }
 
-  # bind private + on a non-default port so we never clash with another PG
+  # bind private + on a non-default port so we never clash with another PG; IST clock
   $conf = Join-Path $dataDir "postgresql.conf"
-  Add-Content -Path $conf -Value "`n# --- SmartTds local ---`nport = $Port`nlisten_addresses = '127.0.0.1'`n"
+  Add-Content -Path $conf -Value "`n# --- SmartTds local ---`nport = $Port`nlisten_addresses = '127.0.0.1'`ntimezone = 'Asia/Kolkata'`nlog_timezone = 'Asia/Kolkata'`n"
 } else {
   Say "Cluster already initialised (reusing $dataDir)" "Yellow"
 }

@@ -77,7 +77,9 @@ public static class AuthEndpoints
 
             // session bookkeeping: drop this user's prior session + purge expired (both modes).
             await conn.ExecuteAsync(new CommandDefinition(
-                "delete from sessions where expires_on < now() or (prodkey=@prodkey and username=@username)",
+                // expires_on is stored in UTC (DateTime.UtcNow); compare in UTC so seat
+                // expiry is correct no matter the DB's timezone (e.g. Asia/Kolkata).
+                "delete from sessions where expires_on < (now() at time zone 'utc') or (prodkey=@prodkey and username=@username)",
                 new { prodkey, username = user.Username }, cancellationToken: ct));
 
             int seatsUsed, maxSeats;
