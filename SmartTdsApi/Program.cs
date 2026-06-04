@@ -30,6 +30,9 @@ builder.Services.Configure<LicensingOptions>(builder.Configuration.GetSection("L
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<LicenceService>();
 
+// Local-mode pg_dump/pg_restore backup feature (no-op binding in Online mode).
+builder.Services.Configure<SmartTdsApi.Endpoints.BackupOptions>(builder.Configuration.GetSection("Backup"));
+
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
 
 // ---- SECURITY: fail fast on a weak/default signing key outside Development ----
@@ -148,5 +151,6 @@ app.MapSalaryChildEndpoints();
 app.MapPayeeEndpoints();
 app.MapSalaryEndpoints();
 app.MapTdsEntryEndpoints();
+app.MapBackupEndpoints();
 
 app.Run();

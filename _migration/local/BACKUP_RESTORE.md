@@ -1,0 +1,63 @@
+# SmartTds backup & restore (PostgreSQL)
+
+Replaces the old SQL-Server `FrmBackup` (`BACKUP DATABASE … TO DISK` → `.bak`),
+which does not work against PostgreSQL. Backups are now logical dumps via
+`pg_dump -Fc`, bundled into one timestamped zip per run, with a rolling version
+history.
+
+> **Local mode only.** Online (the shared VPS cluster) is backed up server-side
+> (pgBackRest/cron, Phase 4) — the API backup endpoints refuse in Online mode so
+> one firm can't dump the shared multi-tenant DB.
+
+## Pieces
+| file | role |
+|------|------|
+| `backup-local.ps1` | dump `masterdbtds` + every `smarttds<YY>` (`pg_dump -Fc`) → `SmartTdsBackup_<label>_<ts>.zip` + manifest; prune to last *N* of that label |
+| `restore-local.ps1` | restore a backup zip: safety-backup → stop API → drop/recreate each DB → `pg_restore` → re-grant `smarttds_app` → start API |
+| `SmartTdsApi/Endpoints/BackupEndpoints.cs` | API: `POST /api/backups`, `GET /api/backups`, `GET /api/backups/{file}`, `POST /api/backups/{file}/restore` (admin + Local only) |
+| `install-service.ps1` | registers a **daily** Windows Scheduled Task `SmartTds Daily Backup` (08:00 PM, keep 30) |
+| `SmartTdsWinUI/Common/BackupApi.cs` | desktop helper: `BackupApi.Create()/List()/Restore()` via the API |
+
+Backups land in `C:\ProgramData\SmartTds\backups\` by default.
+
+## Versioning / retention
+Each run writes a new `SmartTdsBackup_<label>_<yyyy_MM_dd_HH_mm_ss>.zip`. Retention
+is **per label**: daily keeps the last `-Keep` (30) dailies; manual (in-app)
+backups are kept separately; a `prerestore` safety copy is auto-made before every
+restore. So you always have a rolling history, never a single overwrite.
+
+## Triggers
+1. **In-app Backup button** → `BackupApi.Create()` → `POST /api/backups`.
+2. **Daily scheduled task** → `backup-local.ps1 -Label daily` (runs even if the app is closed).
+
+## Manual use (CLI)
+```powershell
+# backup now (keep last 30 manual)
+powershell -ExecutionPolicy Bypass -File backup-local.ps1 -Label manual -Keep 30
+# restore (DESTRUCTIVE)
+powershell -ExecutionPolicy Bypass -File restore-local.ps1 -BackupZip "C:\ProgramData\SmartTds\backups\SmartTdsBackup_manual_2026_06_04_18_00_00.zip" -Force
+```
+Defaults: PG `127.0.0.1:5433`, superuser `postgres`/`postgres`, bin `…\SmartTds\pgsql\bin`.
+If you provisioned with a non-default `-SuperPwd`, pass the same `-SuperPwd` here.
+
+## Desktop wiring (VS2022)
+1. Add `Common\BackupApi.cs` to `SmartTdsWinUI.csproj` (`<Compile Include="Common\BackupApi.cs" />`).
+2. Gut `FrmBackup` of all `System.Data.SqlClient` / `BACKUP DATABASE` /
+   `SqlDataSourceEnumerator` code. Wire the **Backup** button to:
+   ```csharp
+   var info = SmartTdsWinUI.Common.BackupApi.Create();
+   MessageBox.Show("Backup created: " + info.fileName);
+   ```
+   For restore, bind a grid to `BackupApi.List()` and call `BackupApi.Restore(fileName)`
+   behind a clear confirmation (it replaces the live databases).
+
+## Installer (Advanced Installer "Database" project)
+Add the two new scripts to the Files page under `_migration\local\`:
+`backup-local.ps1`, `restore-local.ps1`. `install-local.ps1` → `install-service.ps1`
+already registers the daily task automatically (pass `-NoBackupTask` to skip).
+
+## Old SQL-Server `.bak` files
+Not supported — `.bak` is SQL Server's binary format; PostgreSQL can't read it.
+New clients are PostgreSQL-only, so there's no legacy import path. (A one-off
+migration would need a SQL Server instance to read the `.bak`, then the
+`convert_*` data pipeline.)

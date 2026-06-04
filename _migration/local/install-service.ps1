@@ -24,8 +24,13 @@ param(
   [string] $ApiServiceName = "SmartTdsApi",
   [string] $PgServiceName  = "SmartTdsPg",
   [switch] $LanFirewall,                             # open the API port for the office LAN
+  [string] $BackupTime     = "20:00",               # daily auto-backup time (HH:mm)
+  [int]    $BackupKeep     = 30,                     # rolling daily backups to retain
+  [switch] $NoBackupTask,                            # skip registering the daily backup task
+  [string] $BackupTaskName = "SmartTds Daily Backup",
   [switch] $Uninstall
 )
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Native tools (sc.exe / pg_ctl / netsh) write warnings to stderr; under EAP=Stop
 # PowerShell 5.1 turns that into a TERMINATING NativeCommandError. Use Continue so
 # best-effort cleanup never aborts; install-path failures use explicit `throw`
@@ -48,6 +53,7 @@ if ($Uninstall) {
     if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
     Remove-Svc $PgServiceName
     & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
+    & schtasks.exe /Delete /TN "$BackupTaskName" /F 2>$null | Out-Null
     Say "Uninstalled." "Green"
   } catch { Say ("uninstall cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
   exit 0
@@ -82,6 +88,17 @@ if ($ApiExe) {
   & sc.exe failure $ApiServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
   Restart-Service $ApiServiceName -ErrorAction SilentlyContinue
   Start-Service   $ApiServiceName -ErrorAction SilentlyContinue
+}
+
+# --- daily auto-backup scheduled task (runs even if the app is never opened) ---
+if (-not $NoBackupTask) {
+  $bscript = Join-Path $here "backup-local.ps1"
+  if (Test-Path $bscript) {
+    Say "Registering daily backup task '$BackupTaskName' at $BackupTime"
+    $tr = 'powershell.exe -ExecutionPolicy Bypass -NoProfile -File "{0}" -Label daily -Keep {1} -Port {2}' -f $bscript,$BackupKeep,$PgPort
+    & schtasks.exe /Create /TN "$BackupTaskName" /TR $tr /SC DAILY /ST $BackupTime /RU SYSTEM /RL HIGHEST /F | Out-Null
+    if ($LASTEXITCODE -ne 0) { Say "  (could not register backup task - $LASTEXITCODE)" "Yellow" }
+  } else { Say "  (backup-local.ps1 not found next to this script - skip task)" "Yellow" }
 }
 
 # --- optional: open the API port to the office LAN (single-PC installs don't need this) ---
