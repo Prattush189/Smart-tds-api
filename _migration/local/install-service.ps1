@@ -38,7 +38,7 @@ function Remove-Svc($name){
     $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
     if ($svc){ Say "Removing service $name"; if ($svc.Status -ne 'Stopped'){ Stop-Service $name -Force -ErrorAction SilentlyContinue }
       & sc.exe delete $name | Out-Null }
-  } catch { Say ("  (could not remove $name: " + $_.Exception.Message + ")") "Yellow" }
+  } catch { Say ("  (could not remove $($name): " + $_.Exception.Message + ")") "Yellow" }
 }
 
 if ($Uninstall) {
