@@ -34,7 +34,7 @@ param(
   [string]   $AppPwd,                                  # smarttds_app pwd (random if blank)
   [string[]] $Years       = @("25","26"),
   [string]   $AdminUser   = "admin",
-  [string]   $AdminPwd    = "Admin@123",
+  [string]   $AdminPwd    = "admin",
   [string]   $LicenceKey  = "DEMO123456",              # the firm's REAL Licence Key (ServiceUL); becomes the admin user's prodkey
   [string]   $ApiDir                                   # optional: patch its appsettings.Local.json
 )

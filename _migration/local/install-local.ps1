@@ -25,7 +25,7 @@
 param(
   [string] $AppDir,                                # optional; defaults to this script's own location (avoids MSI [APPDIR] quoting issues)
   [string] $AdminUser  = "admin",
-  [string] $AdminPwd   = "Admin@123",
+  [string] $AdminPwd   = "admin",
   [int]    $ApiPort    = 5080,
   [int]    $PgPort     = 5433,
   [string] $DataRoot   = (Join-Path $env:ProgramData "SmartTds"),

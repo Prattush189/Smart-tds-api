@@ -66,7 +66,7 @@ screen and it **binds on first login** (no key needed during setup). So you only
 
 **Product Details → Properties** → add one **public** property (UPPERCASE):
 
-- `ADMINPWD` = `Admin@123`
+- `ADMINPWD` = `admin`  (default bootstrap admin password; the seeded login is `admin` / `admin`)
 
 (You can skip even this and let the default `Admin@123` apply.)
 
@@ -80,7 +80,7 @@ screen and it **binds on first login** (no key needed during setup). So you only
   `[System64Folder]WindowsPowerShell\v1.0\powershell.exe`
 - **Arguments**:
   ```
-  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AdminPwd "Admin@123" -Lan
+  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -Lan
   ```
   (drop `-Lan` for a single-PC install that needn't accept LAN clients; the Licence
   Key is NOT passed here — the firm enters it at first login)
