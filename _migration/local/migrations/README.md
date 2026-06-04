@@ -28,12 +28,26 @@ Examples:
   baseline; new year DBs are created from it and then brought current by the same
   `year__*` migrations.
 
-## Running
-`migrate-local.ps1` runs automatically from `install-local.ps1` (after provisioning)
-on every install/update. Manual:
-```powershell
-powershell -ExecutionPolicy Bypass -File ..\migrate-local.ps1
-```
+## How they reach each environment
+**Local and the VPS are independent islands** — nothing syncs between them. A
+migration must be *delivered as a file* and *run* in each place separately.
+
+### Local installs (delivered by SmartUpdater, applied automatically)
+1. **Fetch:** ship the new `migrations\*.sql` inside the SmartUpdater update package
+   (vendor packaging). SmartUpdater overwrites them into the install on next launch.
+2. **Run (automatic, no reinstall, no new exe for schema-only changes):**
+   - the desktop calls `POST /api/migrate` right after login (`MigrateApi.Run()`), and
+   - the local API also runs them on **service startup** (`RunMigrationsOnStartup`).
+   Both invoke `migrate-local.ps1` (as the `postgres` superuser); it's idempotent.
+3. Or on a full installer run, `install-local.ps1` → `migrate-local.ps1`.
+
+Manual: `powershell -ExecutionPolicy Bypass -File ..\migrate-local.ps1`
+
+### VPS (cloud)
+Not auto-applied by deploy (by choice). Apply on the server when you ship a schema
+change: `sudo -u postgres psql -d <db> -f <master|year file>` (or run
+`migrate-local.ps1`'s logic via psql). The API runs as least-privilege and cannot
+perform DDL, so migrations are a privileged step.
 
 (No migrations exist yet — the baseline schema is current. Add the first one when a
 schema change ships.)

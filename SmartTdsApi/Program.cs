@@ -153,4 +153,7 @@ app.MapSalaryEndpoints();
 app.MapTdsEntryEndpoints();
 app.MapBackupEndpoints();
 
+// Local mode: self-apply any pending schema migrations on startup (idempotent).
+SmartTdsApi.Endpoints.BackupEndpoints.RunMigrationsOnStartup(app.Services);
+
 app.Run();
