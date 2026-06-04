@@ -46,7 +46,16 @@ $pgSql    = Join-Path $mig "phase1\pg"
 $ph5      = Join-Path $mig "phase5"
 $dataDir  = Join-Path $InstallRoot "data"
 $logFile  = Join-Path $InstallRoot "pg.log"
-if (-not $AppPwd) { $AppPwd = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(18)) }
+
+# PS 5.1 / .NET Framework safe random bytes (the static RandomNumberGenerator.GetBytes(int)
+# only exists in .NET 6+; the installer runs under Windows PowerShell 5.1).
+function New-RandomBase64([int]$count) {
+  $b = New-Object byte[] $count
+  ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($b)
+  return [Convert]::ToBase64String($b)
+}
+
+if (-not $AppPwd) { $AppPwd = New-RandomBase64 18 }
 $prodkey  = $LicenceKey.Trim().ToUpperInvariant()
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -214,7 +223,7 @@ if ($ApiDir) {
     $j = Get-Content $cfg -Raw | ConvertFrom-Json
     $j.Db.Password = $AppPwd
     $j.Db.Port     = $Port
-    $j.Jwt.Key     = [Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(48))
+    $j.Jwt.Key     = New-RandomBase64 48
     ($j | ConvertTo-Json -Depth 8) | Set-Content -Path $cfg -Encoding utf8
   } else { Say "  (no appsettings.Local.json at $ApiDir - skip)" "Yellow" }
 }
