@@ -215,6 +215,31 @@ public static class ChallanEndpoints
             }
         }).WithName("UpdateChallan");
 
+        // DELETE /api/challans/all?subCode=&ayId=  — bulk hard delete of every
+        // addchallan row for a firm in this AY database (no isdeleted column).
+        grp.MapDelete("/all", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct, int subCode, int ayId) =>
+        {
+            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
+                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+
+            try
+            {
+                using var conn = await db.OpenYearAsync(year!, ct);
+                const string sql = "delete from addchallan where subcode = @subCode and ayid = @ayId";
+                await conn.ExecuteAsync(
+                    new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
+                return Results.NoContent();
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (PostgresException pe) when (pe.SqlState == "3D000")
+            {
+                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
+            }
+        }).WithName("DeleteAllChallansForAy");
+
         // DELETE /api/challans/{id}  — hard delete (addchallan has no isdeleted column)
         grp.MapDelete("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {

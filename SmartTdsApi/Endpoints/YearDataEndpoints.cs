@@ -399,20 +399,24 @@ public static class YearDataEndpoints
                               value15g, eincome, cincome, amtpaid, layr, type, quarter,
                               modifiedon, isdeleted";
 
-        // GET /api/f15hnpayee?subCode=&ayId=
+        // GET /api/f15hnpayee?subCode=&ayId=&formId=
+        // subCode/ayId/formId are all optional (0/omitted => not filtered) so the
+        // BAL's GetAll(subCode, ayId) and GetByFormId(formId) both map here.
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
-            int subCode, int ayId) =>
+            int? subCode, int? ayId, int? formId) =>
         {
             if (!TryYear(http, out var year, out var err)) return err;
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {cols} from f15hnpayee
-                            where subcode = @subCode and ayid = @ayId
-                              and (isdeleted is null or isdeleted = false)
+                            where (isdeleted is null or isdeleted = false)
+                              and (@subCode is null or @subCode = 0 or subcode = @subCode)
+                              and (@ayId    is null or @ayId    = 0 or ayid    = @ayId)
+                              and (@formId  is null or @formId  = 0 or formid  = @formId)
                             order by tid";
                 var rows = await conn.QueryAsync(
-                    new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
+                    new CommandDefinition(sql, new { subCode, ayId, formId }, cancellationToken: ct));
                 return Results.Ok(rows);
             }
             catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }

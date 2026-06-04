@@ -165,6 +165,21 @@ public static class BillingEndpoints
             return Results.Ok(rows);
         }).WithName("ListBillHead");
 
+        // GET /api/billhead/pending?subCode= — pending (unpaid) bills for a firm.
+        // "Pending" = outstanding balance > 0, i.e. (totamt-amtreceived-amtdisc) > 0,
+        // across all years; undeleted only. (Replaces the legacy pending-bills query.)
+        grp.MapGet("/billhead/pending", async (int subCode, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            using var conn = await db.OpenMasterAsync(ct);
+            const string sql = @"select * from billhead
+                                 where subcode = @subCode and isdeleted = false
+                                   and (coalesce(totamt,0) - coalesce(amtreceived,0) - coalesce(amtdisc,0)) > 0
+                                 order by billno desc";
+            var rows = await conn.QueryAsync(
+                new CommandDefinition(sql, new { subCode }, cancellationToken: ct));
+            return Results.Ok(rows);
+        }).WithName("ListPendingBillHead");
+
         // GET /api/billhead/nextno?conscode=&ayId= — next bill number, race-safe.
         // Advisory xact lock serializes concurrent number allocation per (conscode, ay).
         grp.MapGet("/billhead/nextno", async (int conscode, int ayId, IDbConnectionFactory db, CancellationToken ct) =>
@@ -320,6 +335,21 @@ public static class BillingEndpoints
                 new CommandDefinition(sql, new { billId, ayId }, cancellationToken: ct));
             return Results.Ok(rows);
         }).WithName("ListBillReceipts");
+
+        // GET /api/billreceipts/lastno?dateFrm=&dateTo= — max receiptno in a date range.
+        // receiptdt is a real date column; dateFrm/dateTo are ISO date strings.
+        // Returns { receiptNo: <max or 0> } (read-only — no advisory lock needed).
+        grp.MapGet("/billreceipts/lastno", async (string? dateFrm, string? dateTo, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            using var conn = await db.OpenMasterAsync(ct);
+            const string sql = @"select coalesce(max(receiptno),0) from billreceipts
+                                 where isdeleted = false
+                                   and (@dateFrm is null or @dateFrm = '' or receiptdt >= cast(@dateFrm as date))
+                                   and (@dateTo  is null or @dateTo  = '' or receiptdt <= cast(@dateTo  as date))";
+            var max = await conn.ExecuteScalarAsync<int>(
+                new CommandDefinition(sql, new { dateFrm, dateTo }, cancellationToken: ct));
+            return Results.Ok(new { receiptNo = max });
+        }).WithName("LastBillReceiptNo");
 
         // GET /api/billreceipts/{id}
         grp.MapGet("/billreceipts/{id:int}", async (int id, IDbConnectionFactory db, CancellationToken ct) =>
