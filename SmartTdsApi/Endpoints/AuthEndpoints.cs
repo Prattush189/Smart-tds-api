@@ -44,19 +44,35 @@ public static class AuthEndpoints
 
             using var conn = await db.OpenMasterAsync(ct);
 
-            // GATE 2 — USER (username + exact prodkey + PBKDF2) — both modes
-            var user = await conn.QueryFirstOrDefaultAsync<UserRow>(new CommandDefinition(
-                @"select userid, prodkey, username, name, pwd, usertype, emailid, mobile,
+            // GATE 2 — USER (username + prodkey + PBKDF2).
+            // ONLINE: exact prodkey match (multi-tenant cloud).
+            // LOCAL: also match an UNBOUND user (blank prodkey) so a generic, key-free
+            //        installer works — the first successful login BINDS the licence key
+            //        the user typed (the legacy "blank = match-any + bind-on-first-login").
+            const string cols = @"userid, prodkey, username, name, pwd, usertype, emailid, mobile,
                          assesseeaddflag, assesseeeditflag, assesseedeleteflag, viewpwdflag,
                          backupflag, restoreflag, efilingflag, rptviewflag, editfiledreturnflag,
-                         selectedper, isdeleted
-                  from users
-                  where username=@Username and prodkey=@prodkey and isdeleted=false limit 1",
+                         selectedper, isdeleted";
+            var where = opt.IsLocal
+                ? "username=@Username and isdeleted=false and (prodkey=@prodkey or coalesce(prodkey,'')='') order by case when prodkey=@prodkey then 0 else 1 end"
+                : "username=@Username and prodkey=@prodkey and isdeleted=false";
+            var user = await conn.QueryFirstOrDefaultAsync<UserRow>(new CommandDefinition(
+                $"select {cols} from users where {where} limit 1",
                 new { req.Username, prodkey }, cancellationToken: ct));
             if (user is null || !PasswordHasher.Verify(req.Password, user.Pwd))
             {
                 log.LogWarning("Login FAILED for {User} on licence {Key}", req.Username, prodkey);
                 return Results.Json(new { error = "invalid credentials" }, statusCode: StatusCodes.Status401Unauthorized);
+            }
+
+            // LOCAL bind-on-first-login: the ServiceUL gate already validated this key.
+            if (opt.IsLocal && string.IsNullOrEmpty(user.Prodkey))
+            {
+                await conn.ExecuteAsync(new CommandDefinition(
+                    "update users set prodkey=@prodkey, modifiedon=now() where userid=@id",
+                    new { prodkey, id = user.Userid }, cancellationToken: ct));
+                user = user with { Prodkey = prodkey };
+                log.LogInformation("Bound user {User} to licence {Key} on first login", user.Username, prodkey);
             }
 
             // session bookkeeping: drop this user's prior session + purge expired (both modes).

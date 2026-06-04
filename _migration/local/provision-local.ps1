@@ -178,13 +178,14 @@ foreach ($y in $Years) {
 }
 
 # ===================================================================== #
-# 7) seed a bootstrap admin USER in the local DB.
-#    LOCAL mode authenticates users against THIS DB (no seat cap), while the
-#    LICENCE itself is validated by the API against smartbizin ServiceUL.svc.
-#    So we seed a user (prodkey = the firm's Licence Key) but NO licences row.
-#    The Licence Key entered at login must be the firm's REAL key (ServiceUL).
+# 7) seed a bootstrap admin USER in the local DB — UNBOUND (blank prodkey).
+#    LOCAL mode authenticates users against THIS DB (no seat cap); the LICENCE
+#    is validated by the API against smartbizin ServiceUL.svc. The admin is
+#    seeded WITHOUT a licence key so the installer is generic: the firm types
+#    its real Licence Key on the login screen and the first successful login
+#    BINDS it to this user (bind-on-first-login). No licences row needed.
 # ===================================================================== #
-Say "Seeding bootstrap admin user '$AdminUser' (prodkey '$prodkey') in local masterdbtds"
+Say "Seeding bootstrap admin user '$AdminUser' (UNBOUND - licence key entered at first login)"
 $iter = 100000
 $salt = New-Object byte[] 16
 ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($salt)
@@ -197,10 +198,10 @@ $userSql = ("INSERT INTO users (prodkey, username, name, pwd, emailid, mobile, u
   "assesseeaddflag, assesseeeditflag, assesseedeleteflag, viewpwdflag, backupflag, " +
   "restoreflag, efilingflag, rptviewflag, editfiledreturnflag, " +
   "createdby, createdon, modifiedby, modifiedon, isdeleted) " +
-  "VALUES ('{0}','{1}','{1}','{2}','{1}@local','0000000000','ADMIN', " +
+  "VALUES ('','{0}','{0}','{1}','{0}@local','0000000000','ADMIN', " +
   "true,true,true,true,true,true,true,true,true, 1, now(), 1, now(), false) " +
   "ON CONFLICT (prodkey, username) DO UPDATE SET pwd=EXCLUDED.pwd, isdeleted=false, modifiedon=now();" `
-  ) -f $prodkey,$uEsc,$pwdHash
+  ) -f $uEsc,$pwdHash
 Psql-Cmd "masterdbtds" $userSql
 
 # ===================================================================== #
@@ -222,7 +223,6 @@ Say "`nDONE." "Green"
 Say ("  PostgreSQL : 127.0.0.1:{0}  (data {1})" -f $Port,$dataDir)
 Say ("  Databases  : masterdbtds, " + (($Years | ForEach-Object { "smarttds$_" }) -join ", "))
 Say  "  App role   : smarttds_app  (pwd stored in API appsettings.Local.json)"
-Say ("  Login      : {0} / {1}   (Licence Key: {2})" -f $AdminUser,$AdminPwd,$prodkey)
+Say ("  Login      : {0} / {1}   (enter your REAL Licence Key on the login screen - it binds on first login)" -f $AdminUser,$AdminPwd)
 Say  "  Licence    : validated by the API against smartbizin ServiceUL.svc (machine-bound). Seats: UNLIMITED (Local mode)." "Yellow"
-Say  "  IMPORTANT  : the Licence Key entered at login must be the firm's REAL key that ServiceUL recognises." "Yellow"
 Say  "`nNext: start the API (set ASPNETCORE_ENVIRONMENT=Local, run SmartTdsApi.exe), then test  http://127.0.0.1:5080/health" "Yellow"

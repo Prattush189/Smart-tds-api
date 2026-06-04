@@ -58,17 +58,17 @@ machine. Client-only PCs keep using `SmartTDS.aip` pointed at the server's LAN I
 
 ---
 
-## Step 3 — Properties for the licence key + admin password
+## Step 3 — One optional property (admin password)
 
-**Product Details → Properties** → add two **public** properties (UPPERCASE so MSI
-passes them to the deferred action):
+The installer is **key-free** — the firm types its Licence Key on the app's login
+screen and it **binds on first login** (no key needed during setup). So you only
+*optionally* set the bootstrap admin password:
 
-- `LICENCEKEY` = `` (the firm's real Licence Key — leave blank to fill at install)
-- `ADMINPWD`   = `Admin@123`
+**Product Details → Properties** → add one **public** property (UPPERCASE):
 
-(Optional: add a small **Dialog** with an edit box bound to `LICENCEKEY` so the
-installer prompts for it. Otherwise pass it on the command line:
-`msiexec /i SmartTDS-Server.msi LICENCEKEY=ABCD1234`.)
+- `ADMINPWD` = `Admin@123`
+
+(You can skip even this and let the default `Admin@123` apply.)
 
 ---
 
@@ -80,9 +80,10 @@ installer prompts for it. Otherwise pass it on the command line:
   `[System64Folder]WindowsPowerShell\v1.0\powershell.exe`
 - **Arguments**:
   ```
-  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AppDir "[APPDIR]" -LicenceKey "[LICENCEKEY]" -AdminPwd "[ADMINPWD]" -Lan
+  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AppDir "[APPDIR]" -AdminPwd "[ADMINPWD]" -Lan
   ```
-  (drop `-Lan` for a single-PC install that needn't accept LAN clients)
+  (drop `-Lan` for a single-PC install that needn't accept LAN clients; the Licence
+  Key is NOT passed here — the firm enters it at first login)
 - **Execution time / stage**: **“When the system is being modified (deferred)”**,
   **after `InstallFiles`**.
 - **Run mode**: **“Run under the LocalSystem account with full privileges”** (elevated;
@@ -91,9 +92,8 @@ installer prompts for it. Otherwise pass it on the command line:
   a non-zero exit code*.
 - **Condition**: `NOT Installed`
 
-> Advanced Installer auto-creates the “property setter” that passes `[APPDIR]`,
-> `[LICENCEKEY]`, `[ADMINPWD]` into the deferred action — just reference them in
-> Arguments as above.
+> Advanced Installer auto-creates the “property setter” that passes `[APPDIR]` and
+> `[ADMINPWD]` into the deferred action — just reference them in Arguments as above.
 
 ---
 

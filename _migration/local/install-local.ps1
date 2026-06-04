@@ -16,14 +16,13 @@
     <AppDir>\_migration\phase5\*.sql             (licensing/grants)
     <AppDir>\SmartTdsWinUI.exe.Config            (the desktop app config, optional)
 
-  EXAMPLE (what the installer runs):
+  EXAMPLE (what the installer runs - NO licence key; the firm enters it at first login):
     powershell -ExecutionPolicy Bypass -File "[APPDIR]_migration\local\install-local.ps1" `
-      -AppDir "[APPDIR]" -LicenceKey "[LICENCEKEY]" -AdminPwd "[ADMINPWD]" -Lan
+      -AppDir "[APPDIR]" -AdminPwd "[ADMINPWD]" -Lan
 #>
 [CmdletBinding()]
 param(
   [Parameter(Mandatory=$true)][string] $AppDir,
-  [string] $LicenceKey = "DEMO123456",          # the firm's REAL Licence Key (ServiceUL); also the admin user's prodkey
   [string] $AdminUser  = "admin",
   [string] $AdminPwd   = "Admin@123",
   [int]    $ApiPort    = 5080,
@@ -56,7 +55,7 @@ try {
   Say "== provisioning database =="
   & (Join-Path $here "provision-local.ps1") `
       -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `
-      -ApiDir $apiDir -LicenceKey $LicenceKey -AdminUser $AdminUser -AdminPwd $AdminPwd
+      -ApiDir $apiDir -AdminUser $AdminUser -AdminPwd $AdminPwd
 
   # 2) stop the provisioning-started server so it can be re-owned by a Windows service (same data dir)
   Say "== handing PostgreSQL over to a service =="
@@ -87,6 +86,6 @@ try {
 
   Say "`nINSTALL COMPLETE." "Green"
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
-  Say ("  Login : {0} / {1}   (Licence Key: {2})" -f $AdminUser,$AdminPwd,$LicenceKey.ToUpper())
+  Say ("  Login : {0} / {1}   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser,$AdminPwd)
 }
 finally { Stop-Transcript | Out-Null }
