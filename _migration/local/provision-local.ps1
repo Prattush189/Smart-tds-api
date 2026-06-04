@@ -116,8 +116,19 @@ if (-not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
 $status = Run-Native $pgctl @("-D",$dataDir,"status")
 if ($status.Out -notmatch "server is running") {
   Say "Starting PostgreSQL on 127.0.0.1:$Port"
-  $r = Run-Native $pgctl @("-D",$dataDir,"-l",$logFile,"-w","-o","-p $Port","start")
-  if ($r.Code -ne 0) { Write-Host $r.Out -ForegroundColor Red; Write-Host (Get-Content $logFile -Tail 20 -EA SilentlyContinue); throw "pg_ctl start failed" }
+  # IMPORTANT: launch via Start-Process (NOT '& ... 2>&1'). pg_ctl spawns the long-running
+  # postgres server, which would inherit a captured pipe handle and hang PowerShell forever.
+  # Start-Process -Wait only waits for pg_ctl itself; postgres keeps running detached.
+  $soOut = Join-Path $InstallRoot "pgctl_start.out"
+  $soErr = Join-Path $InstallRoot "pgctl_start.err"
+  $argLine = "-D `"$dataDir`" -l `"$logFile`" -w -t 60 -o `"-p $Port`" start"
+  $proc = Start-Process -FilePath $pgctl -ArgumentList $argLine -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $soOut -RedirectStandardError $soErr
+  if ($proc.ExitCode -ne 0) {
+    Write-Host (Get-Content $soOut,$soErr,$logFile -Tail 40 -ErrorAction SilentlyContinue) -ForegroundColor Red
+    throw "pg_ctl start failed (exit $($proc.ExitCode)) - see $logFile"
+  }
+  Say "PostgreSQL started."
 } else {
   Say "PostgreSQL already running" "Yellow"
 }
