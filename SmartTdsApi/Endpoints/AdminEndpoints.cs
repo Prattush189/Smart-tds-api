@@ -187,7 +187,7 @@ public static class AdminEndpoints
             if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update users set isdeleted = true where prodkey = @prodkey and username = @username";
+            const string sql = "delete from users where prodkey = @prodkey and username = @username";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { prodkey, username }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteUser");
@@ -256,7 +256,7 @@ public static class AdminEndpoints
         grp.MapDelete("/bankdetails/{id:int}", async (int id, IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update bankdetails set isdeleted = true where id = @id";
+            const string sql = "delete from bankdetails where id = @id";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteBankDetails");

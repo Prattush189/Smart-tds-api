@@ -24,6 +24,8 @@
 **/smarttds.env
 **/*.local.json
 _migration/tools/_*.sql
+# customer seed DATA (PII: PANs, bank accounts) — keep converter, not the data
+_migration/seed_prats/seed_data_prats_*.sql
 
 # local-mode build output (never commit)
 _migration/local/dist/

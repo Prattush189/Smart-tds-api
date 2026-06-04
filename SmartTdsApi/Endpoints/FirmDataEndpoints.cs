@@ -199,7 +199,7 @@ public static class FirmDataEndpoints
                 return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update consultant set isdeleted = true where conscode = @id and prodkey = @prodkey";
+            const string sql = "delete from consultant where conscode = @id and prodkey = @prodkey";
             await conn.ExecuteAsync(
                 new CommandDefinition(sql, new { id, prodkey }, cancellationToken: ct));
             return Results.NoContent();
@@ -264,7 +264,7 @@ public static class FirmDataEndpoints
                 return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update groups set isdeleted = true where grpcode = @id and prodkey = @prodkey";
+            const string sql = "delete from groups where grpcode = @id and prodkey = @prodkey";
             await conn.ExecuteAsync(
                 new CommandDefinition(sql, new { id, prodkey }, cancellationToken: ct));
             return Results.NoContent();

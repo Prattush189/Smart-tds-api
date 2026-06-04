@@ -153,7 +153,7 @@ public static class YearDataEndpoints
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
-                const string sql = "update tdsdeduction set isdeleted = true where id = @id";
+                const string sql = "delete from tdsdeduction where id = @id";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return Results.NoContent();
             }
@@ -265,7 +265,7 @@ public static class YearDataEndpoints
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
-                const string sql = "update ddodet set isdeleted = true where tid = @tid";
+                const string sql = "delete from ddodet where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
             }
@@ -377,7 +377,7 @@ public static class YearDataEndpoints
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
-                const string sql = "update f15hn set isdeleted = true where tid = @tid";
+                const string sql = "delete from f15hn where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
             }
@@ -500,7 +500,7 @@ public static class YearDataEndpoints
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
-                const string sql = "update f15hnpayee set isdeleted = true where tid = @tid";
+                const string sql = "delete from f15hnpayee where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
             }

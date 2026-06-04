@@ -227,11 +227,14 @@ public static class BillingEndpoints
             return Results.NoContent();
         }).WithName("UpdateBillHead");
 
-        // DELETE /api/billhead/{id} — soft delete.
+        // DELETE /api/billhead/{id} — hard delete (permanent). Removes the bill's
+        // receipts first (billreceipts FK has no cascade); billdetails are removed
+        // automatically by their ON DELETE CASCADE FK.
         grp.MapDelete("/billhead/{id:int}", async (int id, IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update billhead set isdeleted = true where id = @id";
+            const string sql = @"delete from billreceipts where billid = @id;
+                                 delete from billhead     where id = @id;";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteBillHead");
@@ -385,7 +388,7 @@ public static class BillingEndpoints
         grp.MapDelete("/billreceipts/{id:int}", async (int id, IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update billreceipts set isdeleted = true where id = @id";
+            const string sql = "delete from billreceipts where id = @id";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteBillReceipts");
@@ -480,7 +483,7 @@ public static class BillingEndpoints
         grp.MapDelete("/billmast/{billId:int}", async (int billId, IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update billmast set isdeleted = true where billid = @billId";
+            const string sql = "delete from billmast where billid = @billId";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { billId }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteBillmast");
@@ -552,7 +555,7 @@ public static class BillingEndpoints
         grp.MapDelete("/billreceipt/{receiptNo:int}", async (int receiptNo, IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update billreceipt set isdeleted = true where receiptno = @receiptNo";
+            const string sql = "delete from billreceipt where receiptno = @receiptNo";
             await conn.ExecuteAsync(new CommandDefinition(sql, new { receiptNo }, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("DeleteBillReceipt");

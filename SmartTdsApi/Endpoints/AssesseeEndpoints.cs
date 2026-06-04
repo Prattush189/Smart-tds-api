@@ -291,7 +291,11 @@ public static class AssesseeEndpoints
             return Results.NoContent();
         }).WithName("UpdateAssessee");
 
-        // DELETE /api/assessees/{subCode} — soft delete.
+        // DELETE /api/assessees/{subCode} — hard delete (permanent).
+        // Removes the assessee and ALL of its MASTER-DB child rows in one
+        // implicit transaction (a multi-statement command runs atomically in PG).
+        // NOTE: per-year transactional rows (payee/tdsentry/challan/etc.) live in
+        // the separate smarttds<YY> databases and are NOT removed here.
         grp.MapDelete("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
@@ -299,7 +303,17 @@ public static class AssesseeEndpoints
                 return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "update assessee set isdeleted = true where subcode = @subCode and prodkey = @prodkey";
+            const string sql = @"
+                delete from billreceipts     where billid in (select id from billhead where subcode = @subCode);
+                delete from billhead         where subcode = @subCode;   -- billdetails cascades
+                delete from billmast         where subcode = @subCode;
+                delete from billreceipt      where subcode = @subCode;
+                delete from bankdetails      where subcode = @subCode;
+                delete from assesseerep      where subcode = @subCode;
+                delete from assesseeresstatus where subcode = @subCode;
+                delete from returndates      where subcode = @subCode;
+                delete from feepaidmarking   where subcode = @subCode;
+                delete from assessee         where subcode = @subCode and prodkey = @prodkey;";
             await conn.ExecuteAsync(
                 new CommandDefinition(sql, new { subCode, prodkey }, cancellationToken: ct));
             return Results.NoContent();
