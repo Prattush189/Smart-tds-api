@@ -69,6 +69,10 @@ try {
       -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `
       -ApiDir $apiDir -AdminUser $AdminUser -AdminPwd $AdminPwd
 
+  # 1b) apply any pending schema migrations to existing/just-created DBs (PG still running)
+  Say "== applying schema migrations =="
+  & (Join-Path $here "migrate-local.ps1") -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort
+
   # 2) stop the provisioning-started server so it can be re-owned by a Windows service (same data dir)
   Say "== handing PostgreSQL over to a service =="
   $pgctl = Join-Path $pgBin "pg_ctl.exe"
