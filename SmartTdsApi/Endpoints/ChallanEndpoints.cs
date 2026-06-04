@@ -46,6 +46,13 @@ public sealed record AddChallanDto
     public bool IsFromItdPortal { get; init; }
 }
 
+public sealed record DeleteByChIdsReq
+{
+    public int SubCode { get; init; }
+    public int AyId { get; init; }
+    public int[] ChIds { get; init; } = System.Array.Empty<int>();
+}
+
 public static class ChallanEndpoints
 {
     public const string YearHeader = "X-Assessment-Year";
@@ -263,5 +270,25 @@ public static class ChallanEndpoints
                 return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
             }
         }).WithName("DeleteChallan");
+
+        // POST /api/challans/delete-by-chids  body { subCode, ayId, chIds:[] }
+        // Hard-delete every addchallan row whose chId is in the list (bulk cleanup).
+        grp.MapPost("/delete-by-chids", async (DeleteByChIdsReq body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
+                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (body?.ChIds == null || body.ChIds.Length == 0) return Results.Ok(new { count = 0 });
+            try
+            {
+                using var conn = await db.OpenYearAsync(year!, ct);
+                const string sql = "delete from addchallan where subcode = @SubCode and ayid = @AyId and chid = ANY(@ChIds)";
+                var affected = await conn.ExecuteAsync(
+                    new CommandDefinition(sql, new { body.SubCode, body.AyId, body.ChIds }, cancellationToken: ct));
+                return Results.Ok(new { count = affected });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (PostgresException pe) when (pe.SqlState == "3D000")
+            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+        }).WithName("DeleteChallansByChIds");
     }
 }

@@ -23,6 +23,13 @@ public sealed record LinkChallanRequest
     public int[] Ids { get; init; } = System.Array.Empty<int>();
 }
 
+public sealed record BulkIdsRequest
+{
+    public int SubCode { get; init; }
+    public int AyId { get; init; }
+    public int[] Ids { get; init; } = System.Array.Empty<int>();
+}
+
 public static class TdsEntryExtraEndpoints
 {
     private const string YearHeader = "X-Assessment-Year";
@@ -481,6 +488,27 @@ public static class TdsEntryExtraEndpoints
             catch (PostgresException pe) when (pe.SqlState == "3D000")
             { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
         }).WithName("UnlinkTdsEntriesByChallan");
+
+        // ── POST /api/tdsentries/delete-by-ids   body { subCode, ayId, ids:[] }
+        // Hard-delete tdsentry rows by an explicit id list (bulk import cleanup).
+        // PG ANY(@Ids) handles any list size in one statement (no 2100-param limit).
+        grp.MapPost("/delete-by-ids", async (BulkIdsRequest body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
+                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (body?.Ids == null || body.Ids.Length == 0) return Results.Ok(new { count = 0 });
+            try
+            {
+                using var conn = await db.OpenYearAsync(year!, ct);
+                const string sql = "delete from tdsentry where subcode = @SubCode and ayid = @AyId and id = ANY(@Ids)";
+                var affected = await conn.ExecuteAsync(
+                    new CommandDefinition(sql, new { body.SubCode, body.AyId, body.Ids }, cancellationToken: ct));
+                return Results.Ok(new { count = affected });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (PostgresException pe) when (pe.SqlState == "3D000")
+            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+        }).WithName("DeleteTdsEntriesByIds");
     }
 
     // Financial-quarter → list of dd/MM/yyyy month tokens (matches the legacy
