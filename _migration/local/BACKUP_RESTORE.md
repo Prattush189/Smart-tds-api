@@ -28,7 +28,16 @@ restore. So you always have a rolling history, never a single overwrite.
 
 ## Triggers
 1. **In-app Backup button** → `BackupApi.Create()` → `POST /api/backups`.
-2. **Daily scheduled task** → `backup-local.ps1 -Label daily` (runs even if the app is closed).
+2. **"Backup and Exit"** (closing dialog) → same, in Local mode only.
+3. **Daily scheduled task** → `backup-local.ps1 -Label daily` (runs even if the app is closed).
+
+### Local-vs-online flag (`Variables.IsLocalServer`)
+`SmartTdsOnline` is `true` in BOTH modes (the app always talks to an API), so it
+can't gate backups. `FrmLogin` now sets `Variables.IsLocalServer = !_online`:
+- **Online (cloud):** `FrmClosingDialog` hides "Backup and Exit" ("auto backup on server").
+- **Local:** the button shows; `MainForm.MainForm_FormClosing` calls `BackupApi.Create()`.
+Wired in: `Global/Variables.cs`, `Masters/Users/FrmLogin.cs`, `Utility/FrmClosingDialog.cs`,
+`MainForm.cs` (rebuild in VS2022).
 
 ## Manual use (CLI)
 ```powershell
