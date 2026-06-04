@@ -16,13 +16,14 @@
     <AppDir>\_migration\phase5\*.sql             (licensing/grants)
     <AppDir>\SmartTdsWinUI.exe.Config            (the desktop app config, optional)
 
-  EXAMPLE (what the installer runs - NO licence key; the firm enters it at first login):
-    powershell -ExecutionPolicy Bypass -File "[APPDIR]_migration\local\install-local.ps1" `
-      -AppDir "[APPDIR]" -AdminPwd "[ADMINPWD]" -Lan
+  EXAMPLE (what the installer runs - NO licence key; the firm enters it at first login).
+  Do NOT pass -AppDir from MSI: [APPDIR] ends in '\' and "[APPDIR]" becomes an escaped
+  quote. The script derives AppDir from its own location instead.
+    powershell -ExecutionPolicy Bypass -File "[APPDIR]_migration\local\install-local.ps1" -AdminPwd "[ADMINPWD]" -Lan
 #>
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory=$true)][string] $AppDir,
+  [string] $AppDir,                                # optional; defaults to this script's own location (avoids MSI [APPDIR] quoting issues)
   [string] $AdminUser  = "admin",
   [string] $AdminPwd   = "Admin@123",
   [int]    $ApiPort    = 5080,
@@ -34,7 +35,19 @@ param(
 $ErrorActionPreference = "Stop"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
 
-$AppDir  = $AppDir.TrimEnd('\')
+# Derive AppDir from THIS script's own folder when not supplied (or supplied mangled).
+# This script lives at  <AppDir>\_migration\local\install-local.ps1, so AppDir is two
+# levels up. MSI's [APPDIR] ends in '\', which when quoted becomes an escaped quote
+# (\") and corrupts -AppDir — so we never rely on it being passed cleanly.
+$scriptDir = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($scriptDir)) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not [string]::IsNullOrWhiteSpace($AppDir)) {
+  $AppDir = $AppDir.Trim('"').Trim().TrimEnd('\')   # defensively strip a stray trailing quote/space/slash
+}
+if ([string]::IsNullOrWhiteSpace($AppDir) -or -not (Test-Path $AppDir)) {
+  $AppDir = Split-Path -Parent (Split-Path -Parent $scriptDir)   # ...\_migration\local -> ...\_migration -> APPDIR
+}
+
 $here    = Join-Path $AppDir "_migration\local"
 $pgBin   = Join-Path $AppDir "pgsql\bin"
 $apiDir  = Join-Path $AppDir "api"

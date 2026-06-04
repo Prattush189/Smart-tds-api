@@ -80,7 +80,7 @@ screen and it **binds on first login** (no key needed during setup). So you only
   `[System64Folder]WindowsPowerShell\v1.0\powershell.exe`
 - **Arguments**:
   ```
-  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AppDir "[APPDIR]" -AdminPwd "[ADMINPWD]" -Lan
+  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AdminPwd "Admin@123" -Lan
   ```
   (drop `-Lan` for a single-PC install that needn't accept LAN clients; the Licence
   Key is NOT passed here — the firm enters it at first login)
@@ -104,8 +104,11 @@ Add a second **Launch file** custom action:
 - **File**: `[System64Folder]WindowsPowerShell\v1.0\powershell.exe`
 - **Arguments**:
   ```
-  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -AppDir "[APPDIR]" -Uninstall
+  -ExecutionPolicy Bypass -NoProfile -File "[APPDIR]_migration\local\install-local.ps1" -Uninstall
   ```
+  > **Do NOT add `-AppDir "[APPDIR]"`** to either action — `[APPDIR]` ends in `\`, so
+  > `"[APPDIR]"` becomes an escaped quote and corrupts the arguments. The script finds
+  > its own folder automatically.
 - **Execution time**: deferred, **LocalSystem**, **before `RemoveFiles`** (so the
   scripts still exist when it runs).
 - **Condition**: `REMOVE="ALL"`
