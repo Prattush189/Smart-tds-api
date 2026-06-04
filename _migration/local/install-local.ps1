@@ -35,18 +35,14 @@ param(
 $ErrorActionPreference = "Stop"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
 
-# Derive AppDir from THIS script's own folder when not supplied (or supplied mangled).
-# This script lives at  <AppDir>\_migration\local\install-local.ps1, so AppDir is two
-# levels up. MSI's [APPDIR] ends in '\', which when quoted becomes an escaped quote
-# (\") and corrupts -AppDir — so we never rely on it being passed cleanly.
+# ALWAYS derive AppDir from THIS script's own folder. This script lives at
+# <AppDir>\_migration\local\install-local.ps1, so AppDir is two levels up.
+# We deliberately IGNORE any -AppDir passed in: MSI's [APPDIR] ends in '\', which
+# when quoted ("[APPDIR]") becomes an escaped quote (\") and corrupts the arguments.
+# Deriving from the script location is 100% reliable and quoting-proof.
 $scriptDir = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($scriptDir)) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
-if (-not [string]::IsNullOrWhiteSpace($AppDir)) {
-  $AppDir = $AppDir.Trim('"').Trim().TrimEnd('\')   # defensively strip a stray trailing quote/space/slash
-}
-if ([string]::IsNullOrWhiteSpace($AppDir) -or -not (Test-Path $AppDir)) {
-  $AppDir = Split-Path -Parent (Split-Path -Parent $scriptDir)   # ...\_migration\local -> ...\_migration -> APPDIR
-}
+$AppDir = Split-Path -Parent (Split-Path -Parent $scriptDir)   # ...\_migration\local -> ...\_migration -> APPDIR
 
 $here    = Join-Path $AppDir "_migration\local"
 $pgBin   = Join-Path $AppDir "pgsql\bin"
