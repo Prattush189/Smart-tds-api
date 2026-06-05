@@ -185,6 +185,8 @@ if (-not (Db-Exists "masterdbtds")) {
 }
 # grants are idempotent — re-run every time (role already created above, so 01's CREATE ROLE no-ops)
 Psql-File "masterdbtds" (Join-Path $ph5 "01_least_privilege_role.sql") @("dbname=masterdbtds")
+# RLS tenant isolation (idempotent) — defense-in-depth behind the API
+Psql-File "masterdbtds" (Join-Path $ph5 "03_rls_master.sql")
 
 # ===================================================================== #
 # 6) per-assessment-year DBs

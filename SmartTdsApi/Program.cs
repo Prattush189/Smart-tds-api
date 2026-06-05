@@ -20,6 +20,7 @@ builder.Host.UseWindowsService();
 builder.Services.Configure<DbOptions>(builder.Configuration.GetSection("Db"));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
+builder.Services.AddHttpContextAccessor();   // lets DbConnectionFactory read the JWT prodkey for RLS
 builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
 builder.Services.AddSingleton<JwtTokenService>();
 

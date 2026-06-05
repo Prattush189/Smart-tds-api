@@ -28,6 +28,8 @@ Write-Host "== master reference data (1407 rows) ==" -ForegroundColor Cyan
 Psql masterdbtds (Join-Path $pg "03_master_seed_data.sql")
 Write-Host "== licensing + sessions tables ==" -ForegroundColor Cyan
 Psql masterdbtds (Join-Path $PSScriptRoot "..\phase5\02_licensing.sql")
+Write-Host "== RLS tenant isolation (defense-in-depth) ==" -ForegroundColor Cyan
+Psql masterdbtds (Join-Path $PSScriptRoot "..\phase5\03_rls_master.sql")
 
 foreach ($y in $Years) {
     $yearDb = "smarttds$y"

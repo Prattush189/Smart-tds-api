@@ -1,4 +1,5 @@
 using System.Data;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -7,8 +8,13 @@ namespace SmartTdsApi.Data;
 public sealed class DbConnectionFactory : IDbConnectionFactory
 {
     private readonly DbOptions _opt;
+    private readonly IHttpContextAccessor _http;
 
-    public DbConnectionFactory(IOptions<DbOptions> opt) => _opt = opt.Value;
+    public DbConnectionFactory(IOptions<DbOptions> opt, IHttpContextAccessor http)
+    {
+        _opt = opt.Value;
+        _http = http;
+    }
 
     public Task<IDbConnection> OpenMasterAsync(CancellationToken ct = default)
         => OpenAsync(_opt.MasterDatabase, ct);
@@ -33,6 +39,16 @@ public sealed class DbConnectionFactory : IDbConnectionFactory
         };
         var conn = new NpgsqlConnection(csb.ConnectionString);
         await conn.OpenAsync(ct);
+
+        // RLS tenant: set app.prodkey from the JWT on EVERY connection. Because the
+        // factory always sets it, a pooled physical connection can never carry a stale
+        // tenant from a previous request. Unset/empty -> RLS default-deny (no rows).
+        var prodkey = _http.HttpContext?.User?.FindFirst("prodkey")?.Value ?? "";
+        using (var cmd = new NpgsqlCommand("select set_config('app.prodkey', @p, false)", conn))
+        {
+            cmd.Parameters.AddWithValue("p", prodkey);
+            await cmd.ExecuteNonQueryAsync(ct);
+        }
         return conn;
     }
 
