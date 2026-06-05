@@ -166,3 +166,27 @@ public sealed class TolerantDoubleConverter : JsonConverter<double>
     }
     public override void Write(Utf8JsonWriter w, double v, JsonSerializerOptions o) => w.WriteNumberValue(v);
 }
+
+// String DTO fields that the desktop fills with a NUMBER or bool (e.g.
+// AddChallanDto.ActualTds/DeductedTds/DepositedTds are string? but carry numeric amounts).
+// Default System.Text.Json refuses number->string; accept it and keep the raw text.
+public sealed class TolerantStringConverter : JsonConverter<string>
+{
+    public override string? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        switch (r.TokenType)
+        {
+            case JsonTokenType.Null: return null;
+            case JsonTokenType.String: return r.GetString();
+            case JsonTokenType.Number:
+                return r.TryGetInt64(out var l)
+                    ? l.ToString(CultureInfo.InvariantCulture)
+                    : r.GetDouble().ToString(CultureInfo.InvariantCulture);
+            case JsonTokenType.True: return "true";
+            case JsonTokenType.False: return "false";
+            default: r.Skip(); return null;   // objects/arrays -> ignore gracefully
+        }
+    }
+    public override void Write(Utf8JsonWriter w, string? v, JsonSerializerOptions o)
+    { if (v is null) w.WriteNullValue(); else w.WriteStringValue(v); }
+}
