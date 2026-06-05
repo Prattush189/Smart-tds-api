@@ -56,19 +56,24 @@ Start-Transcript -Path (Join-Path $logDir "install-local.log") -Append | Out-Nul
 
 try {
   if ($Uninstall) {
-    Say "Removing SmartTds services..."
-    # Best-effort: an uninstall custom action must NEVER fail (or it blocks removal).
-    try { & (Join-Path $here "install-service.ps1") -PgBin $pgBin -Uninstall }
-    catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
+    # The whole uninstall is best-effort and must NEVER fail the MSI action.
+    $ErrorActionPreference = 'SilentlyContinue'
+    Say "Removing SmartTds..."
 
-    # Kill any lingering processes so (a) the app can't keep serving logins after
-    # uninstall and (b) MSI can delete the api\ / pgsql\ files (postgres.exe locks them).
+    # 1) KILL processes FIRST — this unlocks the data + pgsql files regardless of
+    #    service state (Stop-Service can fail with "Cannot open service"). Do it before
+    #    deleting services so the purge and MSI file-removal always succeed.
     try {
       Get-Process postgres -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -and ($_.Path -like "$AppDir*" -or $_.Path -like "$DataRoot*") } |
         Stop-Process -Force -ErrorAction SilentlyContinue
       Get-Process SmartTdsApi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     } catch { Say ("process cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
+    Start-Sleep -Milliseconds 500
+
+    # 2) remove the services (processes are already dead, so this is clean)
+    try { & (Join-Path $here "install-service.ps1") -PgBin $pgBin -Uninstall }
+    catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
 
     if ($PurgeData) {
       Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\)" "Yellow"
