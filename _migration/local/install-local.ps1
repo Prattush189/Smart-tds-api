@@ -30,7 +30,8 @@ param(
   [int]    $PgPort     = 5433,
   [string] $DataRoot   = (Join-Path $env:ProgramData "SmartTds"),
   [switch] $Lan,                                  # open the API port for the office LAN
-  [switch] $Uninstall
+  [switch] $Uninstall,
+  [switch] $PurgeData                             # on uninstall, ALSO delete the PG data + backups (full wipe)
 )
 $ErrorActionPreference = "Stop"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
@@ -58,7 +59,22 @@ try {
     # Best-effort: an uninstall custom action must NEVER fail (or it blocks removal).
     try { & (Join-Path $here "install-service.ps1") -PgBin $pgBin -Uninstall }
     catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
-    Say "Done. (PostgreSQL data left intact under $dataDir)" "Green"
+
+    # Kill any lingering processes so (a) the app can't keep serving logins after
+    # uninstall and (b) MSI can delete the api\ / pgsql\ files (postgres.exe locks them).
+    try {
+      Get-Process postgres -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and ($_.Path -like "$AppDir*" -or $_.Path -like "$DataRoot*") } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+      Get-Process SmartTdsApi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    } catch { Say ("process cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
+
+    if ($PurgeData) {
+      Say "Purging PostgreSQL data + backups under $DataRoot" "Yellow"
+      Remove-Item -Recurse -Force $DataRoot -ErrorAction SilentlyContinue
+    } else {
+      Say "Done. PostgreSQL data + backups left intact under $DataRoot (pass -PurgeData for a full wipe)." "Green"
+    }
     Stop-Transcript | Out-Null
     exit 0
   }
