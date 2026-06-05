@@ -226,13 +226,16 @@ $dollar  = [char]36
 $pwdHash = "pbkdf2" + $dollar + $iter + $dollar + [Convert]::ToBase64String($salt) + $dollar + [Convert]::ToBase64String($kdf.GetBytes(32))
 $uEsc   = $AdminUser.Replace("'", "''")
 
+# Seed the bootstrap admin ONLY if no such user exists yet (any prodkey). This is
+# idempotent across re-provisions even after bind-on-first-login changed the admin's
+# prodkey (ON CONFLICT on prodkey+username would otherwise insert a duplicate).
 $userSql = ("INSERT INTO users (prodkey, username, name, pwd, emailid, mobile, usertype, " +
   "assesseeaddflag, assesseeeditflag, assesseedeleteflag, viewpwdflag, backupflag, " +
   "restoreflag, efilingflag, rptviewflag, editfiledreturnflag, " +
   "createdby, createdon, modifiedby, modifiedon, isdeleted) " +
-  "VALUES ('','{0}','{0}','{1}','{0}@local','0000000000','ADMIN', " +
-  "true,true,true,true,true,true,true,true,true, 1, now(), 1, now(), false) " +
-  "ON CONFLICT (prodkey, username) DO UPDATE SET pwd=EXCLUDED.pwd, isdeleted=false, modifiedon=now();" `
+  "SELECT '','{0}','{0}','{1}','{0}@local','0000000000','ADMIN', " +
+  "true,true,true,true,true,true,true,true,true, 1, now(), 1, now(), false " +
+  "WHERE NOT EXISTS (SELECT 1 FROM users WHERE username='{0}');" `
   ) -f $uEsc,$pwdHash
 Psql-Cmd "masterdbtds" $userSql
 
