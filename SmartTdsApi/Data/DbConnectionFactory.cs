@@ -1,5 +1,6 @@
 using System.Data;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Npgsql;
 
@@ -9,11 +10,15 @@ public sealed class DbConnectionFactory : IDbConnectionFactory
 {
     private readonly DbOptions _opt;
     private readonly IHttpContextAccessor _http;
+    private readonly IMemoryCache _cache;
 
-    public DbConnectionFactory(IOptions<DbOptions> opt, IHttpContextAccessor http)
+    public static string SubcodeCacheKey(string prodkey) => "sub:" + prodkey;
+
+    public DbConnectionFactory(IOptions<DbOptions> opt, IHttpContextAccessor http, IMemoryCache cache)
     {
         _opt = opt.Value;
         _http = http;
+        _cache = cache;
     }
 
     public Task<IDbConnection> OpenMasterAsync(CancellationToken ct = default)
@@ -40,16 +45,22 @@ public sealed class DbConnectionFactory : IDbConnectionFactory
 
     private string CurrentProdkey() => _http.HttpContext?.User?.FindFirst("prodkey")?.Value ?? "";
 
-    // The firm's assessee subcodes as a CSV (for app.subcodes). A no-cache master
-    // query per year-connection open — cheap at this scale; always fresh so a newly
-    // added assessee is immediately usable. (Add a short cache if year screens get chatty.)
+    // The firm's assessee subcodes as a CSV (for app.subcodes), CACHED per prodkey so
+    // year-DB calls don't each open a master connection + query. Evicted on assessee
+    // create/delete (AssesseeEndpoints) so a new assessee is usable immediately; the
+    // absolute expiry is just a safety net.
     private async Task<string> OwnedSubcodesCsvAsync(string prodkey, CancellationToken ct)
     {
+        if (_cache.TryGetValue(SubcodeCacheKey(prodkey), out string? cached) && cached is not null)
+            return cached;
+
         using var master = (NpgsqlConnection)await OpenAsync(_opt.MasterDatabase, ct);  // sets app.prodkey -> assessee scoped
         using var cmd = new NpgsqlCommand(
             "select string_agg(subcode::text, ',') from assessee where prodkey = @p", master);
         cmd.Parameters.AddWithValue("p", prodkey);
-        return (await cmd.ExecuteScalarAsync(ct)) as string ?? "";
+        var csv = (await cmd.ExecuteScalarAsync(ct)) as string ?? "";
+        _cache.Set(SubcodeCacheKey(prodkey), csv, TimeSpan.FromMinutes(10));
+        return csv;
     }
 
     private async Task<IDbConnection> OpenAsync(string database, CancellationToken ct)

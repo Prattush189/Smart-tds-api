@@ -21,6 +21,7 @@ builder.Services.Configure<DbOptions>(builder.Configuration.GetSection("Db"));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
 builder.Services.AddHttpContextAccessor();   // lets DbConnectionFactory read the JWT prodkey for RLS
+builder.Services.AddMemoryCache();           // caches per-firm subcodes for year-DB RLS (perf)
 builder.Services.AddSingleton<IDbConnectionFactory, DbConnectionFactory>();
 builder.Services.AddSingleton<JwtTokenService>();
 

@@ -257,7 +257,8 @@ public static class AssesseeEndpoints
         }).WithName("GetAssessee");
 
         // POST /api/assessees — insert all writable columns; prodkey from JWT; returns { id }.
-        grp.MapPost("/", async (AssesseeReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
+        grp.MapPost("/", async (AssesseeReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
+            Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
             if (string.IsNullOrEmpty(prodkey))
@@ -271,6 +272,8 @@ public static class AssesseeEndpoints
             p.Add("prodkey", prodkey);
             var newSubcode = await conn.ExecuteScalarAsync<int>(
                 new CommandDefinition(sql, p, cancellationToken: ct));
+            // new subcode -> drop the cached subcode list so year-DB RLS sees it at once
+            cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
             return Results.Ok(new { id = newSubcode });
         }).WithName("CreateAssessee");
 
@@ -296,7 +299,8 @@ public static class AssesseeEndpoints
         // implicit transaction (a multi-statement command runs atomically in PG).
         // NOTE: per-year transactional rows (payee/tdsentry/challan/etc.) live in
         // the separate smarttds<YY> databases and are NOT removed here.
-        grp.MapDelete("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
+        grp.MapDelete("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db,
+            Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
             if (string.IsNullOrEmpty(prodkey))
@@ -316,6 +320,7 @@ public static class AssesseeEndpoints
                 delete from assessee         where subcode = @subCode and prodkey = @prodkey;";
             await conn.ExecuteAsync(
                 new CommandDefinition(sql, new { subCode, prodkey }, cancellationToken: ct));
+            cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
             return Results.NoContent();
         }).WithName("DeleteAssessee");
     }
