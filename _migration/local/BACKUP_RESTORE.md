@@ -50,15 +50,19 @@ Defaults: PG `127.0.0.1:5433`, superuser `postgres`/`postgres`, bin `…\SmartTd
 If you provisioned with a non-default `-SuperPwd`, pass the same `-SuperPwd` here.
 
 ## Desktop wiring (VS2022)
-1. Add `Common\BackupApi.cs` to `SmartTdsWinUI.csproj` (`<Compile Include="Common\BackupApi.cs" />`).
-2. Gut `FrmBackup` of all `System.Data.SqlClient` / `BACKUP DATABASE` /
-   `SqlDataSourceEnumerator` code. Wire the **Backup** button to:
-   ```csharp
-   var info = SmartTdsWinUI.Common.BackupApi.Create();
-   MessageBox.Show("Backup created: " + info.fileName);
-   ```
-   For restore, bind a grid to `BackupApi.List()` and call `BackupApi.Restore(fileName)`
-   behind a clear confirmation (it replaces the live databases).
+Add these to `SmartTdsWinUI.csproj` (old-style project — new files aren't auto-included):
+```xml
+<Compile Include="Common\BackupApi.cs" />
+<Compile Include="Utility\FrmBackupRestore.cs" />
+```
+- **Backup / Restore screen** = `Utility\FrmBackupRestore.cs` (code-only form, no Designer):
+  lists backups, **Take Backup**, **Restore Selected** (with confirmation + auto safety
+  backup). Uses `BackupApi.Create/List/Restore`.
+- **Entry point:** `MainForm.AddBackupRestoreButton()` adds a **"Backup / Restore"** button
+  to the **last ribbon tab** at runtime, **only in Local mode** (`Variables.IsLocalServer`).
+  Online backups are server-side, so the button isn't shown there.
+- Closing dialog "Backup and Exit" (local) calls `BackupApi.Create()` (already wired).
+- The old `FrmBackup` (SQL Server) is superseded; you can leave it unreferenced or delete it.
 
 ## Installer (Advanced Installer "Database" project)
 Add the two new scripts to the Files page under `_migration\local\`:
