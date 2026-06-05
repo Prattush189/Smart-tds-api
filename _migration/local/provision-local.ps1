@@ -186,7 +186,9 @@ if (-not (Db-Exists "masterdbtds")) {
 # grants are idempotent — re-run every time (role already created above, so 01's CREATE ROLE no-ops)
 Psql-File "masterdbtds" (Join-Path $ph5 "01_least_privilege_role.sql") @("dbname=masterdbtds")
 # RLS tenant isolation (idempotent) — defense-in-depth behind the API
-Psql-File "masterdbtds" (Join-Path $ph5 "03_rls_master.sql")
+$rlsMaster = Join-Path $ph5 "03_rls_master.sql"
+if (Test-Path $rlsMaster) { Psql-File "masterdbtds" $rlsMaster }
+else { Say "  (03_rls_master.sql not bundled - master RLS NOT applied; add it to the installer)" "Yellow" }
 
 # ===================================================================== #
 # 6) per-assessment-year DBs
@@ -202,7 +204,9 @@ foreach ($y in $Years) {
   }
   Psql-File $db (Join-Path $ph5 "01_least_privilege_role.sql") @("dbname=$db")
   # RLS tenant isolation for the year DB (idempotent)
-  Psql-File $db (Join-Path $ph5 "04_rls_year.sql")
+  $rlsYear = Join-Path $ph5 "04_rls_year.sql"
+  if (Test-Path $rlsYear) { Psql-File $db $rlsYear }
+  else { Say "  (04_rls_year.sql not bundled - year RLS NOT applied; add it to the installer)" "Yellow" }
 }
 
 # ===================================================================== #
