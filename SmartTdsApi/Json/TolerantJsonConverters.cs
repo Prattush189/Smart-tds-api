@@ -112,3 +112,57 @@ public sealed class TolerantNullableDoubleConverter : JsonConverter<double?>
     public override void Write(Utf8JsonWriter w, double? v, JsonSerializerOptions o)
     { if (v.HasValue) w.WriteNumberValue(v.Value); else w.WriteNullValue(); }
 }
+
+// ── Non-nullable numerics (e.g. AddChallanDto.Tax/Interest/… are plain `double`,
+//    SubCode/AyId are plain `int`). A legacy "" / quoted-number / null coerces to 0. ──
+public sealed class TolerantInt32Converter : JsonConverter<int>
+{
+    public override int Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetInt32(out var n) ? n : (int)r.GetDouble();
+        if (r.TokenType == JsonTokenType.True) return 1;
+        if (r.TokenType == JsonTokenType.False) return 0;
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return 0;
+        if (int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (int)d : 0;
+    }
+    public override void Write(Utf8JsonWriter w, int v, JsonSerializerOptions o) => w.WriteNumberValue(v);
+}
+
+public sealed class TolerantInt64Converter : JsonConverter<long>
+{
+    public override long Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetInt64(out var n) ? n : (long)r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return 0;
+        if (long.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (long)d : 0;
+    }
+    public override void Write(Utf8JsonWriter w, long v, JsonSerializerOptions o) => w.WriteNumberValue(v);
+}
+
+public sealed class TolerantDecimalConverter : JsonConverter<decimal>
+{
+    public override decimal Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetDecimal(out var n) ? n : (decimal)r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return 0m;
+        return decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : 0m;
+    }
+    public override void Write(Utf8JsonWriter w, decimal v, JsonSerializerOptions o) => w.WriteNumberValue(v);
+}
+
+public sealed class TolerantDoubleConverter : JsonConverter<double>
+{
+    public override double Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return 0d;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : 0d;
+    }
+    public override void Write(Utf8JsonWriter w, double v, JsonSerializerOptions o) => w.WriteNumberValue(v);
+}

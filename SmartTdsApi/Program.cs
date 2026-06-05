@@ -53,6 +53,10 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     o.SerializerOptions.Converters.Add(new TolerantNullableInt64Converter());
     o.SerializerOptions.Converters.Add(new TolerantNullableDecimalConverter());
     o.SerializerOptions.Converters.Add(new TolerantNullableDoubleConverter());
+    o.SerializerOptions.Converters.Add(new TolerantInt32Converter());
+    o.SerializerOptions.Converters.Add(new TolerantInt64Converter());
+    o.SerializerOptions.Converters.Add(new TolerantDecimalConverter());
+    o.SerializerOptions.Converters.Add(new TolerantDoubleConverter());
 });
 
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
