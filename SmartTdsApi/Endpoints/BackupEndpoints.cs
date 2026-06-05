@@ -89,18 +89,39 @@ public static class BackupEndpoints
             return Results.File(path, "application/zip", Path.GetFileName(path));
         }).WithName("DownloadBackup");
 
-        // POST /api/backups/{file}/restore — restore from an existing backup zip
-        grp.MapPost("/{file}/restore", async (string file, ClaimsPrincipal user,
-                               IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt, CancellationToken ct) =>
+        // POST /api/backups/{file}/restore — restore from an existing backup zip.
+        // restore-local.ps1 STOPS and STARTS the API service, so it must NOT run inside
+        // this request (it would kill its own host mid-restore). We launch it DETACHED
+        // via a one-shot Scheduled Task (runs as SYSTEM, independent of the API process)
+        // and return immediately; the client then waits for the API to come back.
+        grp.MapPost("/{file}/restore", (string file, ClaimsPrincipal user,
+                               IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
             if (!IsAdmin(user)) return Results.Forbid();
-            var path = SafeBackupPath(opt.Value.ResolvedBackupRoot, file);
+            var o = opt.Value;
+            var path = SafeBackupPath(o.ResolvedBackupRoot, file);
             if (path is null || !File.Exists(path)) return Results.NotFound();
-            var (code, stdout, stderr) = await RunScript(opt.Value, "restore-local.ps1",
-                new[] { "-BackupZip", path, "-Force" }, ct);
-            if (code != 0) return Results.Problem("Restore failed: " + Tail(stderr + stdout), statusCode: 500);
-            return Results.Ok(new { ok = true, restored = Path.GetFileName(path) });
+
+            // write a wrapper .cmd (avoids schtasks nested-quote pain), then run it as a
+            // detached one-shot SYSTEM task.
+            var script = Path.Combine(o.ResolvedScriptsDir, "restore-local.ps1");
+            var wrapper = Path.Combine(o.ResolvedBackupRoot, "_restore-run.cmd");
+            File.WriteAllText(wrapper,
+                "@echo off\r\n" +
+                $"powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"{script}\" " +
+                $"-BackupZip \"{path}\" -PgBin \"{o.ResolvedPgBin}\" -Port {o.Port} " +
+                $"-SuperUser {o.SuperUser} -SuperPwd {o.SuperPwd} -Force\r\n");
+
+            RunQuick("schtasks.exe", $"/Create /TN SmartTdsRestore /TR \"{wrapper}\" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F");
+            RunQuick("schtasks.exe", "/Run /TN SmartTdsRestore");
+
+            return Results.Json(new
+            {
+                ok = true,
+                restored = Path.GetFileName(path),
+                message = "Restore started. The server will restart in a moment — please reopen SmartTds shortly."
+            }, statusCode: 202);
         }).WithName("RestoreBackup");
 
         // POST /api/migrate — apply pending schema migrations (Local only). Any
@@ -142,6 +163,26 @@ public static class BackupEndpoints
 
     private static bool IsAdmin(ClaimsPrincipal user) =>
         string.Equals(user.FindFirstValue("usertype"), "ADMIN", StringComparison.OrdinalIgnoreCase);
+
+    // fire a short-lived helper (schtasks) and wait briefly; used to launch the
+    // detached restore task. Best-effort: never throws into the request.
+    private static void RunQuick(string exe, string args)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(exe)
+            {
+                Arguments = args,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            using var p = Process.Start(psi);
+            p?.WaitForExit(15000);
+        }
+        catch { /* ignore — restore task creation is best-effort */ }
+    }
 
     // resolve a user-supplied file name strictly inside BackupRoot (no traversal)
     private static string? SafeBackupPath(string root, string file)
