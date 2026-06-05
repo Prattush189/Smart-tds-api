@@ -1,0 +1,114 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace SmartTdsApi.Json;
+
+// The legacy WinForms desktop (Newtonsoft, loose typing) serializes some values in shapes the
+// API's strict System.Text.Json body-binding rejects with an empty-body 400 — e.g. a bool sent
+// as the STRING "false"/"true" (the exact bug that broke Excel import on PUT /api/payees:
+// PayeeDto.DirFlag is bool? but the desktop sends "DirFlag":"false"), an absent number as "",
+// or a number wrapped in quotes. These converters accept those loose shapes on READ; WRITE
+// always emits canonical JSON so API responses stay clean for every client.
+internal static class Tolerant
+{
+    public static bool? ReadBool(ref Utf8JsonReader r)
+    {
+        switch (r.TokenType)
+        {
+            case JsonTokenType.True: return true;
+            case JsonTokenType.False: return false;
+            case JsonTokenType.Null: return null;
+            case JsonTokenType.Number:
+                return r.TryGetInt64(out var n) ? n != 0 : r.GetDouble() != 0d;
+            case JsonTokenType.String:
+                var s = r.GetString();
+                if (s is null) return null;
+                s = s.Trim();
+                if (s.Length == 0) return null;
+                switch (s.ToLowerInvariant())
+                {
+                    case "true": case "1": case "y": case "yes": case "t": return true;
+                    case "false": case "0": case "n": case "no": case "f": return false;
+                }
+                return bool.TryParse(s, out var b) ? b : (bool?)null;
+            default: return null;
+        }
+    }
+
+    /// <summary>Trimmed numeric text from a String/Null token, or null for null/empty. (Number
+    /// tokens are read directly by each converter.)</summary>
+    public static string? NumberText(ref Utf8JsonReader r)
+    {
+        if (r.TokenType != JsonTokenType.String) return null;
+        var s = r.GetString()?.Trim();
+        return string.IsNullOrEmpty(s) ? null : s;
+    }
+}
+
+public sealed class TolerantBooleanConverter : JsonConverter<bool>
+{
+    public override bool Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o) => Tolerant.ReadBool(ref r) ?? false;
+    public override void Write(Utf8JsonWriter w, bool v, JsonSerializerOptions o) => w.WriteBooleanValue(v);
+}
+
+public sealed class TolerantNullableBooleanConverter : JsonConverter<bool?>
+{
+    public override bool? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o) => Tolerant.ReadBool(ref r);
+    public override void Write(Utf8JsonWriter w, bool? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteBooleanValue(v.Value); else w.WriteNullValue(); }
+}
+
+public sealed class TolerantNullableInt32Converter : JsonConverter<int?>
+{
+    public override int? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetInt32(out var n) ? n : (int)r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return null;
+        if (int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (int)d : (int?)null;
+    }
+    public override void Write(Utf8JsonWriter w, int? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteNumberValue(v.Value); else w.WriteNullValue(); }
+}
+
+public sealed class TolerantNullableInt64Converter : JsonConverter<long?>
+{
+    public override long? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetInt64(out var n) ? n : (long)r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return null;
+        if (long.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v)) return v;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? (long)d : (long?)null;
+    }
+    public override void Write(Utf8JsonWriter w, long? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteNumberValue(v.Value); else w.WriteNullValue(); }
+}
+
+public sealed class TolerantNullableDecimalConverter : JsonConverter<decimal?>
+{
+    public override decimal? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.TryGetDecimal(out var n) ? n : (decimal)r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return null;
+        return decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : (decimal?)null;
+    }
+    public override void Write(Utf8JsonWriter w, decimal? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteNumberValue(v.Value); else w.WriteNullValue(); }
+}
+
+public sealed class TolerantNullableDoubleConverter : JsonConverter<double?>
+{
+    public override double? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o)
+    {
+        if (r.TokenType == JsonTokenType.Number) return r.GetDouble();
+        var s = Tolerant.NumberText(ref r);
+        if (s is null) return null;
+        return double.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var v) ? v : (double?)null;
+    }
+    public override void Write(Utf8JsonWriter w, double? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteNumberValue(v.Value); else w.WriteNullValue(); }
+}

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
@@ -10,6 +11,7 @@ using Microsoft.OpenApi.Models;
 using SmartTdsApi.Auth;
 using SmartTdsApi.Data;
 using SmartTdsApi.Endpoints;
+using SmartTdsApi.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -36,6 +38,22 @@ builder.Services.AddSingleton<LicenceService>();
 
 // Local-mode pg_dump/pg_restore backup feature (no-op binding in Online mode).
 builder.Services.Configure<SmartTdsApi.Endpoints.BackupOptions>(builder.Configuration.GetSection("Backup"));
+
+// ---- Tolerant JSON body-binding for the legacy desktop client ----
+// The WinForms app (Newtonsoft, loose typing) sends e.g. "DirFlag":"false" (string, not bool),
+// "" for absent numbers, and quoted numbers. System.Text.Json is strict and 400s on those with
+// an empty body (which the desktop surfaces as "Import failed:" with no detail). Accept the loose
+// shapes on input; responses stay canonical. Covers payee, tdsentry, challan and every DTO.
+builder.Services.ConfigureHttpJsonOptions(o =>
+{
+    o.SerializerOptions.NumberHandling = JsonNumberHandling.AllowReadingFromString;
+    o.SerializerOptions.Converters.Add(new TolerantBooleanConverter());
+    o.SerializerOptions.Converters.Add(new TolerantNullableBooleanConverter());
+    o.SerializerOptions.Converters.Add(new TolerantNullableInt32Converter());
+    o.SerializerOptions.Converters.Add(new TolerantNullableInt64Converter());
+    o.SerializerOptions.Converters.Add(new TolerantNullableDecimalConverter());
+    o.SerializerOptions.Converters.Add(new TolerantNullableDoubleConverter());
+});
 
 var jwt = builder.Configuration.GetSection("Jwt").Get<JwtOptions>()!;
 
