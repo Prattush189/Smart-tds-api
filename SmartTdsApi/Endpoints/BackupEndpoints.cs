@@ -28,6 +28,10 @@ public sealed class BackupOptions
     public string ResolvedBackupRoot =>
         BackupRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds", "backups");
+    // pgsql ships alongside the API under the install dir (…\api → …\pgsql\bin),
+    // NOT under ProgramData — resolve it relative to the API exe.
+    public string ResolvedPgBin =>
+        PgBin ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "pgsql", "bin"));
 }
 
 /// <summary>
@@ -157,7 +161,7 @@ public static class BackupEndpoints
             "-ExecutionPolicy", "Bypass", "-NoProfile", "-File", scriptPath,
             "-Port", o.Port.ToString(), "-SuperUser", o.SuperUser, "-SuperPwd", o.SuperPwd
         };
-        if (!string.IsNullOrEmpty(o.PgBin))      { args.Add("-PgBin"); args.Add(o.PgBin!); }
+        args.Add("-PgBin"); args.Add(o.ResolvedPgBin);   // always: pgsql is under the app dir, not ProgramData
         if (!string.IsNullOrEmpty(o.BackupRoot)) { args.Add("-BackupRoot"); args.Add(o.BackupRoot!); }
         args.AddRange(extra);
 
