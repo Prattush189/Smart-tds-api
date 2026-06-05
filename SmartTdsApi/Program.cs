@@ -1,7 +1,9 @@
+using System.Net;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
@@ -62,16 +64,40 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization();
 
+// ---- Behind nginx (Online) Kestrel only binds 127.0.0.1, so the reverse proxy is the
+// ONLY ingress. Honor X-Forwarded-For so RemoteIpAddress is the REAL client IP; otherwise
+// every online client looks like 127.0.0.1 and shares one rate-limit bucket (the bug that
+// broke bulk import + could lock out logins). Loopback-only bind makes trusting the header
+// safe — external clients can't reach Kestrel directly to spoof it. No-op if nginx omits XFF. ----
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    o.KnownProxies.Add(IPAddress.Loopback);
+    o.KnownProxies.Add(IPAddress.IPv6Loopback);
+});
+
 // ---- SECURITY: rate limiting (deadline-storm + brute-force protection) ----
+// UseRateLimiter is placed AFTER UseAuthentication (below), so ctx.User is populated here
+// and the global limiter can partition by the authenticated firm instead of raw IP.
 builder.Services.AddRateLimiter(o =>
 {
     o.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    // global per-client fixed window
+    // Per-request partition: an AUTHENTICATED caller gets a generous per-firm window so
+    // legitimate bulk work (Excel import = hundreds of small writes) is never throttled,
+    // and one firm's burst can't starve another. ANONYMOUS traffic (health, pre-login)
+    // stays on a tight per-IP window.
     o.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
-            factory: _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromSeconds(10), QueueLimit = 0 }));
-    // strict limiter for login (brute-force)
+    {
+        var firm = ctx.User?.FindFirst("prodkey")?.Value;
+        if (!string.IsNullOrEmpty(firm))
+            return RateLimitPartition.GetFixedWindowLimiter("firm:" + firm,
+                _ => new FixedWindowRateLimiterOptions { PermitLimit = 2000, Window = TimeSpan.FromSeconds(10), QueueLimit = 0 });
+
+        var ip = ctx.Connection.RemoteIpAddress?.ToString() ?? "anon";
+        return RateLimitPartition.GetFixedWindowLimiter("ip:" + ip,
+            _ => new FixedWindowRateLimiterOptions { PermitLimit = 120, Window = TimeSpan.FromSeconds(10), QueueLimit = 0 });
+    });
+    // strict limiter for login (brute-force) — per real client IP (X-Forwarded-For honored)
     o.AddPolicy("login", ctx =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: ctx.Connection.RemoteIpAddress?.ToString() ?? "anon",
@@ -101,6 +127,9 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Must run before anything that reads the client IP (rate limiter, error logs).
+app.UseForwardedHeaders();
+
 // ---- SECURITY: clean problem-details on unhandled errors (no stack-trace leak) ----
 app.UseExceptionHandler(eh => eh.Run(async ctx =>
 {
@@ -128,8 +157,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors();
+app.UseAuthentication();   // populate ctx.User BEFORE the limiter so it can partition per-firm
 app.UseRateLimiter();
-app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow })).AllowAnonymous();
