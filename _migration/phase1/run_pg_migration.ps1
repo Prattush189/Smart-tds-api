@@ -37,6 +37,7 @@ foreach ($y in $Years) {
     docker exec $Container psql -U postgres -c "DROP DATABASE IF EXISTS $yearDb;"   | Out-Null
     docker exec $Container psql -U postgres -c "CREATE DATABASE $yearDb;"           | Out-Null
     Psql $yearDb (Join-Path $pg "01_smarttds_year_template.sql")
+    Psql $yearDb (Join-Path $PSScriptRoot "..\phase5\04_rls_year.sql")
 }
 
 $mt = docker exec $Container psql -U postgres -d masterdbtds -t -c "select count(*) from information_schema.tables where table_schema='public';"

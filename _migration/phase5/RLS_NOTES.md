@@ -26,11 +26,19 @@ is the safety net underneath it.
 - `users` / `licences` / `sessions` — auth infra; login reads them *before* a JWT
   exists, so RLS there would break login. Protected by the auth logic + prodkey filters.
 - reference tables (`country`, `state`, `district`, `tdsrate`, …) — shared, read-only.
-- **Year DBs (`smarttds<YY>`)** — not yet. Those tables have no `prodkey` column
-  (only `subcode`), and `assessee` lives in the master DB (no cross-DB join). A
-  follow-up can add RLS there via an `app.subcodes` GUC the API sets per request, or
-  a denormalized `prodkey` column. For now year data is scoped by the API's `subcode`
-  filter.
+## Year DBs (`smarttds<YY>`) — covered via `app.subcodes`
+Year tables have no `prodkey` (only `subcode`), and `assessee` is in master (no
+cross-DB join). So the year tenant key is the GUC **`app.subcodes`** — the CSV of the
+firm's assessee subcodes. The API sets it per year connection (`DbConnectionFactory`
+fetches the firm's subcodes from master — itself prodkey-scoped — and `set_config`s
+them). Policies in `04_rls_year.sql`:
+- subcode-keyed: `payee`, `tdsentry`, `addchallan`, `salary`, `tdsdeduction`,
+  `tdscompincome`, `filingstatus`, `ddodet`, `f15hn`, `f15hnpayee`
+- salid-keyed (via `salary.subcode`): `salarynaturedetails`, `salaryexemptallowances`,
+  `salaryperquisitedetails`
+- `applicationparams` (year `ver` config, no subcode) left open.
+Unset `app.subcodes` → default deny. Cost: one extra master query per year-connection
+open to fetch subcodes (no cache → always fresh; add a short cache if a hot path needs it).
 
 ## Applying it
 - **New installs:** automatic — `provision-local.ps1` and `run_pg_migration.ps1` apply
@@ -40,8 +48,10 @@ is the safety net underneath it.
   ```bash
   # 1. deploy the API that sets app.prodkey (REQUIRED FIRST)
   cd /www/wwwroot/smarttds-src && git pull --ff-only && bash _migration/deploy/deploy-server.sh
-  # 2. then enable RLS
+  # 2. then enable RLS — master, then each year DB
   sudo -u postgres psql -d masterdbtds -f _migration/phase5/03_rls_master.sql
+  sudo -u postgres psql -d smarttds25  -f _migration/phase5/04_rls_year.sql
+  sudo -u postgres psql -d smarttds26  -f _migration/phase5/04_rls_year.sql
   ```
   ⚠️ **Order matters.** If you enable RLS while the *old* API (which doesn't set
   `app.prodkey`) is still running, every tenant query returns 0 rows and the app

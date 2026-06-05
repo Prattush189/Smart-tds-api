@@ -201,6 +201,8 @@ foreach ($y in $Years) {
     Say "$db already exists (skipping)" "Yellow"
   }
   Psql-File $db (Join-Path $ph5 "01_least_privilege_role.sql") @("dbname=$db")
+  # RLS tenant isolation for the year DB (idempotent)
+  Psql-File $db (Join-Path $ph5 "04_rls_year.sql")
 }
 
 # ===================================================================== #
