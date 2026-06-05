@@ -267,5 +267,92 @@ public static class PayeeEndpoints
                 return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
             }
         }).WithName("DeletePayee");
+
+        // POST /api/payees/batch  body [ ...payees ]  → bulk INSERT in one round-trip,
+        // returns { ids, count } (ids in declaration order). Used by Excel import so a
+        // few-hundred-payee file is one request instead of one PUT/POST per payee.
+        grp.MapPost("/batch", async (PayeeDto[] body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
+                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (body is null || body.Length == 0) return Results.Ok(new { ids = System.Array.Empty<int>(), count = 0 });
+
+            try
+            {
+                using var conn = await db.OpenYearAsync(year!, ct);
+                if (conn is NpgsqlConnection npg && npg.State != System.Data.ConnectionState.Open)
+                    await npg.OpenAsync(ct);
+
+                const string sql = @"
+                    insert into payee
+                        (subcode, ayid, tsid, empflag, pan, panstatus, name,
+                         add1, add2, add3, add4, city, dob, doj, fname,
+                         phone, phone2, pincode, zipcode, statename, tin,
+                         usercode, empdesig, stcode, dol, dor, leaves,
+                         email, email2, panstat, flag206abcca, flag115bac,
+                         freezepan, sex, status, rstatus, country, state,
+                         dirflag, taxregime)
+                    values
+                        (@SubCode, @AyId, @TsId, @EmpFlag, @Pan, @PanStatus, @Name,
+                         @Add1, @Add2, @Add3, @Add4, @City, @DoB, @DoJ, @FName,
+                         @Phone, @Phone2, @Pincode, @Zipcode, @StateName, @Tin,
+                         @UserCode, @EmpDesig, @StCode, @DoL, @DoR, @Leaves,
+                         @Email, @Email2, @PanStat, @Flag206ABCCA, @Flag115BAC,
+                         @FreezePan, @Sex, @Status, @RStatus, @Country, @State,
+                         @DirFlag, @TaxRegime)
+                    returning id";
+
+                using var tx = conn.BeginTransaction();
+                var ids = new List<int>(body.Length);
+                foreach (var dto in body)
+                    ids.Add(await conn.ExecuteScalarAsync<int>(
+                        new CommandDefinition(sql, dto, transaction: tx, cancellationToken: ct)));
+                tx.Commit();
+                return Results.Ok(new { ids, count = ids.Count });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (PostgresException pe) when (pe.SqlState == "3D000")
+            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+        }).WithName("BatchInsertPayees");
+
+        // POST /api/payees/update-batch  body [ ...payees ]  → bulk UPDATE by id in one
+        // round-trip, returns { count }. Used by Excel import to refresh existing payees.
+        grp.MapPost("/update-batch", async (PayeeDto[] body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
+                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (body is null || body.Length == 0) return Results.Ok(new { count = 0 });
+
+            try
+            {
+                using var conn = await db.OpenYearAsync(year!, ct);
+                if (conn is NpgsqlConnection npg && npg.State != System.Data.ConnectionState.Open)
+                    await npg.OpenAsync(ct);
+
+                const string sql = @"
+                    update payee set
+                        subcode=@SubCode, ayid=@AyId, tsid=@TsId, empflag=@EmpFlag, pan=@Pan,
+                        panstatus=@PanStatus, name=@Name, add1=@Add1, add2=@Add2, add3=@Add3, add4=@Add4,
+                        city=@City, dob=@DoB, doj=@DoJ, fname=@FName, phone=@Phone, phone2=@Phone2,
+                        pincode=@Pincode, zipcode=@Zipcode, statename=@StateName, tin=@Tin,
+                        usercode=@UserCode, empdesig=@EmpDesig, stcode=@StCode, dol=@DoL, dor=@DoR,
+                        leaves=@Leaves, email=@Email, email2=@Email2, panstat=@PanStat,
+                        flag206abcca=@Flag206ABCCA, flag115bac=@Flag115BAC, freezepan=@FreezePan,
+                        sex=@Sex, status=@Status, rstatus=@RStatus, country=@Country, state=@State,
+                        dirflag=@DirFlag, taxregime=@TaxRegime
+                    where id = @Id";
+
+                using var tx = conn.BeginTransaction();
+                var count = 0;
+                foreach (var dto in body)
+                    count += await conn.ExecuteAsync(
+                        new CommandDefinition(sql, dto, transaction: tx, cancellationToken: ct));
+                tx.Commit();
+                return Results.Ok(new { count });
+            }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (PostgresException pe) when (pe.SqlState == "3D000")
+            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+        }).WithName("BatchUpdatePayees");
     }
 }

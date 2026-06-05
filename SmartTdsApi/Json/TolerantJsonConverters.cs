@@ -44,6 +44,32 @@ internal static class Tolerant
         var s = r.GetString()?.Trim();
         return string.IsNullOrEmpty(s) ? null : s;
     }
+
+    private static readonly string[] DateFormats =
+    {
+        "dd-MM-yyyy", "dd/MM/yyyy", "yyyy-MM-dd", "dd-MM-yyyy HH:mm:ss",
+        "dd/MM/yyyy HH:mm:ss", "MM/dd/yyyy", "yyyy-MM-ddTHH:mm:ss"
+    };
+
+    public static DateTime? ReadDate(ref Utf8JsonReader r)
+    {
+        switch (r.TokenType)
+        {
+            case JsonTokenType.Null: return null;
+            case JsonTokenType.String:
+                if (r.TryGetDateTime(out var iso)) return iso;     // fast path: ISO 8601
+                var s = r.GetString();
+                if (string.IsNullOrWhiteSpace(s)) return null;
+                s = s.Trim();
+                if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var p)) return p;
+                if (DateTime.TryParseExact(s, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pe)) return pe;
+                return null;
+            case JsonTokenType.StartObject:
+            case JsonTokenType.StartArray:
+                r.Skip(); return null;
+            default: return null;
+        }
+    }
 }
 
 public sealed class TolerantBooleanConverter : JsonConverter<bool>
@@ -189,4 +215,19 @@ public sealed class TolerantStringConverter : JsonConverter<string>
     }
     public override void Write(Utf8JsonWriter w, string? v, JsonSerializerOptions o)
     { if (v is null) w.WriteNullValue(); else w.WriteStringValue(v); }
+}
+
+// DateTime DTO fields (CreatedOn/ModifiedOn/billDt/receiptDt/instrumentDt …). Accept the
+// desktop's loose dates: ISO, dd-MM-yyyy / dd/MM/yyyy, or "" (-> MinValue / null) instead of 400.
+public sealed class TolerantDateTimeConverter : JsonConverter<DateTime>
+{
+    public override DateTime Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o) => Tolerant.ReadDate(ref r) ?? default;
+    public override void Write(Utf8JsonWriter w, DateTime v, JsonSerializerOptions o) => w.WriteStringValue(v);
+}
+
+public sealed class TolerantNullableDateTimeConverter : JsonConverter<DateTime?>
+{
+    public override DateTime? Read(ref Utf8JsonReader r, Type t, JsonSerializerOptions o) => Tolerant.ReadDate(ref r);
+    public override void Write(Utf8JsonWriter w, DateTime? v, JsonSerializerOptions o)
+    { if (v.HasValue) w.WriteStringValue(v.Value); else w.WriteNullValue(); }
 }
