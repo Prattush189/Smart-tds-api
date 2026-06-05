@@ -245,11 +245,17 @@ Psql-Cmd "masterdbtds" $userSql
 if ($ApiDir) {
   $cfg = Join-Path $ApiDir "appsettings.Local.json"
   if (Test-Path $cfg) {
-    Say "Patching $cfg (Db.Password, Db.Port, Jwt.Key)"
+    Say "Patching $cfg (Db.Password, Db.Port, Jwt.Key, Backup.PgBin)"
     $j = Get-Content $cfg -Raw | ConvertFrom-Json
     $j.Db.Password = $AppPwd
     $j.Db.Port     = $Port
     $j.Jwt.Key     = New-RandomBase64 48
+    # tell the API where pgsql lives (backup/restore/migrate). It's under the app dir,
+    # NOT ProgramData, so the script defaults would be wrong without this.
+    if (-not ($j.PSObject.Properties.Name -contains 'Backup')) {
+      $j | Add-Member -NotePropertyName Backup -NotePropertyValue ([pscustomobject]@{})
+    }
+    $j.Backup | Add-Member -NotePropertyName PgBin -NotePropertyValue $PgBin -Force
     ($j | ConvertTo-Json -Depth 8) | Set-Content -Path $cfg -Encoding utf8
   } else { Say "  (no appsettings.Local.json at $ApiDir - skip)" "Yellow" }
 }
