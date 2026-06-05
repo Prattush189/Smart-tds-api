@@ -58,6 +58,12 @@ Add these to `SmartTdsWinUI.csproj` (old-style project — new files aren't auto
 - **Backup / Restore screen** = `Utility\FrmBackupRestore.cs` (code-only form, no Designer):
   lists backups, **Take Backup**, **Restore Selected** (with confirmation + auto safety
   backup). Uses `BackupApi.Create/List/Restore`.
+- **Restore runs DETACHED.** `restore-local.ps1` stops/starts the API service, so the
+  endpoint can't run it inline (it would kill its own host). It launches a one-shot
+  SYSTEM Scheduled Task (`SmartTdsRestore`) and returns `202` immediately; the desktop
+  shows "server restarting, reopen shortly" and **closes the app**. The API goes down for
+  the swap and comes back on its own — reopen and re-login. (CLI `restore-local.ps1` is
+  unaffected; it already runs outside the API.)
 - **Entry point:** `MainForm.AddBackupRestoreButton()` adds a **"Backup / Restore"** button
   to the **last ribbon tab** at runtime, **only in Local mode** (`Variables.IsLocalServer`).
   Online backups are server-side, so the button isn't shown there.
