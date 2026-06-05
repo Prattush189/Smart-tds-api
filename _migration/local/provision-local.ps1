@@ -257,6 +257,15 @@ if ($ApiDir) {
     }
     $j.Backup | Add-Member -NotePropertyName PgBin -NotePropertyValue $PgBin -Force
     ($j | ConvertTo-Json -Depth 8) | Set-Content -Path $cfg -Encoding utf8
+
+    # BULLETPROOF: set the role password to EXACTLY what the API will read from the
+    # file we just wrote. This eliminates any role<->config drift (the recurring
+    # "28P01 password authentication failed" / login 500), whatever caused it.
+    $apiPw = (Get-Content $cfg -Raw | ConvertFrom-Json).Db.Password
+    if ($apiPw) {
+      Psql-Cmd "postgres" ("ALTER ROLE smarttds_app PASSWORD '" + $apiPw.Replace("'","''") + "';")
+      Say "  Role password synced to API config."
+    }
   } else { Say "  (no appsettings.Local.json at $ApiDir - skip)" "Yellow" }
 }
 
