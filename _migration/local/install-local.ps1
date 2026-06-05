@@ -83,6 +83,23 @@ try {
     } else {
       Say "Done. PostgreSQL data + backups left intact under $DataRoot." "Green"
     }
+
+    # MSI removes the app files it installed, but leaves any modified/runtime files
+    # (patched appsettings, machineid, logs) — which keeps the AppDir around. We can't
+    # delete our own running folder synchronously, so schedule a DETACHED cleanup that
+    # waits for MSI + this script to finish, then removes the whole AppDir.
+    try {
+      $cl = Join-Path $env:TEMP "_sttds_cleanup.cmd"
+      Set-Content -Path $cl -Encoding ascii -Value @"
+@echo off
+ping 127.0.0.1 -n 12 >nul
+rmdir /s /q "$AppDir"
+schtasks /Delete /TN SmartTdsCleanup /F
+"@
+      & schtasks.exe /Create /TN SmartTdsCleanup /TR "`"$cl`"" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F | Out-Null
+      & schtasks.exe /Run /TN SmartTdsCleanup | Out-Null
+    } catch { }
+
     # NOTE: do NOT Stop-Transcript here — the outer finally does it. Calling it twice
     # raises a terminating error in the finally (under EAP=Stop) -> powershell exits 1
     # -> MSI falsely reports the uninstall action failed even though cleanup succeeded.
