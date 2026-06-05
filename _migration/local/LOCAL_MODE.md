@@ -11,6 +11,15 @@ desktop only ever talks to "an API"; the only differences are config + packaging
 | **User login** | username/password vs the **local** DB | username/password vs the **cloud** DB |
 | **Seats** | **unlimited** | enforced (cap from the cloud `licences` table) |
 
+### System requirements (decided 2026-06-04)
+- **Server machine** (runs API + PostgreSQL): **Windows 10/11 or Server 2016+** — required by
+  .NET 8 + modern PostgreSQL. (Win7 is NOT supported for the server; .NET 8 dropped it.)
+- **Client PCs** (run only the desktop app over the LAN): **Windows 7 SP1+** is fine — the
+  WinForms app is .NET Framework 4.5.2, already Win7-compatible. They just need `ApiBaseUrl`
+  pointed at the server's LAN IP.
+- Single-PC installs therefore need that one PC to be Win10+. (If a customer ever needs the whole
+  stack on a lone Win7 box, the fallback is retargeting the API to .NET 6 + PostgreSQL 13 — both EOL.)
+
 **Licence validation** is the legacy `ServiceUL.svc` check, now done **server-side in the API**
 (replaces the old desktop `Pump.cs`). The API computes a stable, persisted **machineId** and binds
 the licence to it (Local = strict one-key-one-server; Online tolerates a key already bound to
