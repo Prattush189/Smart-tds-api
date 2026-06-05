@@ -76,9 +76,11 @@ try {
     catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
 
     if ($PurgeData) {
-      Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\)" "Yellow"
+      Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\ + machineid.dat)" "Yellow"
+      # Keep backups (recovery) and machineid.dat (so the licence stays machine-bound
+      # on reinstall — otherwise ServiceUL sees a new machine -> "Product Key Already in use").
       Get-ChildItem -LiteralPath $DataRoot -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne 'backups' } |
+        Where-Object { $_.Name -ne 'backups' -and $_.Name -ne 'machineid.dat' } |
         ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     } else {
       Say "Done. PostgreSQL data + backups left intact under $DataRoot." "Green"
