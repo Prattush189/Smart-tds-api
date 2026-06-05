@@ -78,7 +78,9 @@ try {
     } else {
       Say "Done. PostgreSQL data + backups left intact under $DataRoot." "Green"
     }
-    Stop-Transcript | Out-Null
+    # NOTE: do NOT Stop-Transcript here — the outer finally does it. Calling it twice
+    # raises a terminating error in the finally (under EAP=Stop) -> powershell exits 1
+    # -> MSI falsely reports the uninstall action failed even though cleanup succeeded.
     exit 0
   }
 
@@ -144,4 +146,4 @@ try {
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
   Say ("  Login : {0} / {1}   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser,$AdminPwd)
 }
-finally { Stop-Transcript | Out-Null }
+finally { try { Stop-Transcript | Out-Null } catch { } }
