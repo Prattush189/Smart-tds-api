@@ -31,7 +31,8 @@ param(
   [string] $DataRoot   = (Join-Path $env:ProgramData "SmartTds"),
   [switch] $Lan,                                  # open the API port for the office LAN
   [switch] $Uninstall,
-  [switch] $PurgeData                             # on uninstall, ALSO delete the PG data + backups (full wipe)
+  [switch] $PurgeData,                            # on uninstall, delete the PG data (KEEPS the backups\ folder)
+  [switch] $RestoreLatestIfFound                  # on install, if a backup exists and the DB is fresh, restore the newest
 )
 $ErrorActionPreference = "Stop"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
@@ -70,10 +71,12 @@ try {
     } catch { Say ("process cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
 
     if ($PurgeData) {
-      Say "Purging PostgreSQL data + backups under $DataRoot" "Yellow"
-      Remove-Item -Recurse -Force $DataRoot -ErrorAction SilentlyContinue
+      Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\)" "Yellow"
+      Get-ChildItem -LiteralPath $DataRoot -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'backups' } |
+        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     } else {
-      Say "Done. PostgreSQL data + backups left intact under $DataRoot (pass -PurgeData for a full wipe)." "Green"
+      Say "Done. PostgreSQL data + backups left intact under $DataRoot." "Green"
     }
     Stop-Transcript | Out-Null
     exit 0
@@ -99,6 +102,27 @@ try {
   & (Join-Path $here "install-service.ps1") `
       -ApiExe (Join-Path $apiDir "SmartTdsApi.exe") -PgBin $pgBin -DataDir $dataDir `
       -PgPort $PgPort -Port $ApiPort -LanFirewall:$Lan
+
+  # 3b) restore the newest backup onto a FRESH install (e.g. after a -PurgeData
+  #     reinstall that kept backups\). Skips if the DB already has data (repair install).
+  if ($RestoreLatestIfFound) {
+    $backupsDir = Join-Path $DataRoot "backups"
+    $latest = Get-ChildItem $backupsDir -Filter "SmartTdsBackup_*.zip" -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($latest) {
+      $env:PGPASSWORD = "postgres"
+      $cnt = & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d masterdbtds -tAc "select count(*) from assessee" 2>$null
+      if (("$cnt".Trim()) -eq "0") {
+        Say ("== restoring most recent backup: " + $latest.Name + " ==")
+        & (Join-Path $here "restore-local.ps1") -BackupZip $latest.FullName -InstallRoot $DataRoot `
+            -PgBin $pgBin -Port $PgPort -Force -NoSafetyBackup
+      } else {
+        Say "  (database already has data - skipping auto-restore)" "Yellow"
+      }
+    } else {
+      Say "  (no backup found in $backupsDir - nothing to restore)" "Yellow"
+    }
+  }
 
   # 4) point THIS machine's desktop app at the local API
   $cfg = Join-Path $AppDir "SmartTdsWinUI.exe.Config"
