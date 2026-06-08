@@ -107,7 +107,10 @@ public static class TdsPayeeEndpoints
                 param.Add("subCode", subCode);
                 param.Add("ayId", ayId);
 
-                if (!string.IsNullOrWhiteSpace(formType))
+                // "ALL" (the FrmChallan "All Forms" option) means NO form filter — not a
+                // literal formtype value. Treating it literally made `formtype = 'ALL'` match
+                // zero rows, so the challan-edit grid showed none of its linked entries.
+                if (!string.IsNullOrWhiteSpace(formType) && formType.Trim().ToUpperInvariant() != "ALL")
                 {
                     sql.Append(" and t.formtype = @formType");
                     param.Add("formType", formType);
