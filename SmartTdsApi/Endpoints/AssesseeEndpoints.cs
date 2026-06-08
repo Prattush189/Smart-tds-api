@@ -270,11 +270,24 @@ public static class AssesseeEndpoints
                          returning subcode";
             var p = ToParams(body);
             p.Add("prodkey", prodkey);
-            var newSubcode = await conn.ExecuteScalarAsync<int>(
-                new CommandDefinition(sql, p, cancellationToken: ct));
-            // new subcode -> drop the cached subcode list so year-DB RLS sees it at once
-            cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
-            return Results.Ok(new { id = newSubcode });
+            try
+            {
+                var newSubcode = await conn.ExecuteScalarAsync<int>(
+                    new CommandDefinition(sql, p, cancellationToken: ct));
+                // new subcode -> drop the cached subcode list so year-DB RLS sees it at once
+                cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
+                return Results.Ok(new { id = newSubcode });
+            }
+            catch (Npgsql.PostgresException pe)
+            {
+                return Results.BadRequest(new { error = "Could not save assessee: " + pe.MessageText
+                    + (string.IsNullOrEmpty(pe.ColumnName) ? "" : " [column: " + pe.ColumnName + "]")
+                    + (string.IsNullOrEmpty(pe.Detail) ? "" : " — " + pe.Detail) });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = "Could not save assessee: " + ex.Message });
+            }
         }).WithName("CreateAssessee");
 
         // PUT /api/assessees/{subCode} — update all writable columns for this prodkey.
@@ -290,8 +303,21 @@ public static class AssesseeEndpoints
             var p = ToParams(body);
             p.Add("subCode", subCode);
             p.Add("prodkey", prodkey);
-            await conn.ExecuteAsync(new CommandDefinition(sql, p, cancellationToken: ct));
-            return Results.NoContent();
+            try
+            {
+                await conn.ExecuteAsync(new CommandDefinition(sql, p, cancellationToken: ct));
+                return Results.NoContent();
+            }
+            catch (Npgsql.PostgresException pe)
+            {
+                return Results.BadRequest(new { error = "Could not save assessee: " + pe.MessageText
+                    + (string.IsNullOrEmpty(pe.ColumnName) ? "" : " [column: " + pe.ColumnName + "]")
+                    + (string.IsNullOrEmpty(pe.Detail) ? "" : " — " + pe.Detail) });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = "Could not save assessee: " + ex.Message });
+            }
         }).WithName("UpdateAssessee");
 
         // DELETE /api/assessees/{subCode} — hard delete (permanent).
@@ -307,21 +333,18 @@ public static class AssesseeEndpoints
                 return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = @"
-                delete from billreceipts     where billid in (select id from billhead where subcode = @subCode);
-                delete from billhead         where subcode = @subCode;   -- billdetails cascades
-                delete from billmast         where subcode = @subCode;
-                delete from billreceipt      where subcode = @subCode;
-                delete from bankdetails      where subcode = @subCode;
-                delete from assesseerep      where subcode = @subCode;
-                delete from assesseeresstatus where subcode = @subCode;
-                delete from returndates      where subcode = @subCode;
-                delete from feepaidmarking   where subcode = @subCode;
-                delete from assessee         where subcode = @subCode and prodkey = @prodkey;";
-            await conn.ExecuteAsync(
+            // SOFT delete. The desktop offers "Revert Deleted", which restores rows whose
+            // isdeleted = true (AssesseeBal.GetDeletedAssessees / RestoreAssessee). A hard
+            // delete left nothing to restore — the user deleted an assessee and "Revert
+            // Deleted" reported none. Mark the row deleted instead: the list endpoint already
+            // hides isdeleted rows, and ALL child data (bank/rep/resstatus/billing/
+            // returndates) is left intact so a restore brings the assessee back whole.
+            const string sql = @"update assessee set isdeleted = true
+                                 where subcode = @subCode and prodkey = @prodkey;";
+            var affected = await conn.ExecuteAsync(
                 new CommandDefinition(sql, new { subCode, prodkey }, cancellationToken: ct));
             cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
-            return Results.NoContent();
+            return affected > 0 ? Results.NoContent() : Results.NotFound();
         }).WithName("DeleteAssessee");
     }
 

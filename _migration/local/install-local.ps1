@@ -87,15 +87,18 @@ try {
     }
 
     # MSI removes the app files it installed, but leaves any modified/runtime files
-    # (patched appsettings, machineid, logs) — which keeps the AppDir around. We can't
-    # delete our own running folder synchronously, so schedule a DETACHED cleanup that
-    # waits for MSI + this script to finish, then removes the whole AppDir.
+    # (patched appsettings, logs). We can't delete our own running folder synchronously,
+    # so schedule a DETACHED cleanup that waits for MSI + this script to finish, then
+    # removes ONLY the SmartTds-owned subfolders (api, _migration, pgsql). Anything else
+    # the user keeps under AppDir (e.g. their desktop .exe) is left untouched.
     try {
       $cl = Join-Path $env:TEMP "_sttds_cleanup.cmd"
       Set-Content -Path $cl -Encoding ascii -Value @"
 @echo off
 ping 127.0.0.1 -n 12 >nul
-rmdir /s /q "$AppDir"
+rmdir /s /q "$AppDir\api"
+rmdir /s /q "$AppDir\_migration"
+rmdir /s /q "$AppDir\pgsql"
 schtasks /Delete /TN SmartTdsCleanup /F
 "@
       & schtasks.exe /Create /TN SmartTdsCleanup /TR "`"$cl`"" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F | Out-Null
