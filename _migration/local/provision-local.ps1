@@ -273,6 +273,6 @@ Say "`nDONE." "Green"
 Say ("  PostgreSQL : 127.0.0.1:{0}  (data {1})" -f $Port,$dataDir)
 Say ("  Databases  : masterdbtds, " + (($Years | ForEach-Object { "smarttds$_" }) -join ", "))
 Say  "  App role   : smarttds_app  (pwd stored in API appsettings.Local.json)"
-Say ("  Login      : {0} / {1}   (enter your REAL Licence Key on the login screen - it binds on first login)" -f $AdminUser,$AdminPwd)
+Say ("  Login      : {0} / (the admin password set during install)   (enter your REAL Licence Key on the login screen - it binds on first login)" -f $AdminUser)
 Say  "  Licence    : validated by the API against smartbizin ServiceUL.svc (machine-bound). Seats: UNLIMITED (Local mode)." "Yellow"
 Say  "`nNext: start the API (set ASPNETCORE_ENVIRONMENT=Local, run SmartTdsApi.exe), then test  http://127.0.0.1:5080/health" "Yellow"

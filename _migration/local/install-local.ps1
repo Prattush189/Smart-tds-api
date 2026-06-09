@@ -171,6 +171,6 @@ schtasks /Delete /TN SmartTdsCleanup /F
 
   Say "`nINSTALL COMPLETE." "Green"
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
-  Say ("  Login : {0} / {1}   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser,$AdminPwd)
+  Say ("  Login : {0} / (the admin password set during install)   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser)
 }
 finally { try { Stop-Transcript | Out-Null } catch { } }
