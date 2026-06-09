@@ -186,7 +186,22 @@ app.UseAuthentication();   // populate ctx.User BEFORE the limiter so it can par
 app.UseRateLimiter();
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "ok", utc = DateTime.UtcNow })).AllowAnonymous();
+// Health + LAN-discovery probe. Opens a connection to the master DB and reports its name,
+// so the desktop's server scan can tell a REAL Smart TDS server (backed by masterdbtds)
+// from any other service answering on :5080. If the master DB is unreachable, `master`
+// comes back null and clients won't list this host.
+app.MapGet("/health", async (SmartTdsApi.Data.IDbConnectionFactory db, CancellationToken ct) =>
+{
+    string master = null;
+    try
+    {
+        using var conn = await db.OpenMasterAsync(ct);
+        master = conn.Database;   // = "masterdbtds" when the master DB is reachable
+    }
+    catch { /* master DB down/missing -> master stays null */ }
+    // `name` lets the desktop's Server list show a friendly machine name instead of a bare IP.
+    return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow });
+}).AllowAnonymous();
 
 app.MapAuthEndpoints();
 app.MapAssesseeEndpoints();
