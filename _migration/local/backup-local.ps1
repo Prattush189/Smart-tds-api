@@ -86,7 +86,9 @@ finally { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
 # Best-effort: a failure here must never fail the backup itself.
 try {
   $locEsc = $BackupRoot -replace "'","''"
-  $today  = Get-Date -Format "dd/MM/yyyy"
+  # InvariantCulture: in a .NET format string "/" means "the culture's separator",
+  # and en-IN renders that as "-" — the app's canonical date format is dd/MM/yyyy.
+  $today  = (Get-Date).ToString("dd/MM/yyyy", [System.Globalization.CultureInfo]::InvariantCulture)
   $recSql = "update applicationparams set value='$locEsc' where name='backupLoc';" +
             "insert into applicationparams(name,value) select 'backupLoc','$locEsc' where not exists (select 1 from applicationparams where name='backupLoc');" +
             "update applicationparams set value='$today' where name='lastBackup';" +
