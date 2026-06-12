@@ -16,8 +16,10 @@ namespace SmartTdsApi.Auth;
 /// (replaces the old desktop Pump.cs flow, now server-side). Validates a licence
 /// key (prodkey) bound to this server's machine-id, returns expiry + registered-to,
 /// and caches a successful result for <see cref="LicensingOptions.RecheckHours"/>.
-/// Online mode tolerates a key already bound to another machine (shared cloud);
-/// Local mode is strict (one key = one LAN server).
+/// Machine binding is STRICT in BOTH modes — one key, one server (the VPS for cloud
+/// keys, the LAN server for local keys). A firm with both deployments gets one key
+/// per deployment (the PRODKEY_&lt;n&gt; convention). Modes still differ on seats:
+/// Online enforces max_seats, Local is unlimited.
 /// </summary>
 public sealed class LicenceService
 {
@@ -223,10 +225,12 @@ public sealed class LicenceService
         var registeredTo = res.Count > 8 ? (res[8] ?? "") : "";
         var today = nowUtc.Date;   // trusted date, not the box clock
 
-        // Online (shared cloud): a key already bound to another machine is OK if not expired.
-        if (_opt.IsOnline && status.Contains("Product Key Already in use", StringComparison.OrdinalIgnoreCase)
-            && expiry.HasValue && expiry.Value.Date >= today)
-            status = "ComeIn";
+        // STRICT machine binding in BOTH modes (user decision 2026-06-12): a key bound to
+        // another machine is rejected on the cloud too — otherwise a local-server licence
+        // would double as a cloud licence. Deployments get their own key (PRODKEY_<n>);
+        // each key binds to ITS server's machine-id at first login (the VPS for cloud).
+        // ServiceUL's "Product Key Already in use" message (with both machine-ids and the
+        // release instruction) is relayed to the user as-is by the fall-through below.
 
         if (status == "ComeIn")
         {
