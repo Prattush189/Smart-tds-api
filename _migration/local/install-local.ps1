@@ -85,11 +85,12 @@ try {
     catch { Say ("uninstall warning (ignored): " + $_.Exception.Message) "Yellow" }
 
     if ($PurgeData) {
-      Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\ + machineid.dat)" "Yellow"
-      # Keep backups (recovery) and machineid.dat (so the licence stays machine-bound
-      # on reinstall — otherwise ServiceUL sees a new machine -> "Product Key Already in use").
+      Say "Purging PostgreSQL data under $DataRoot (KEEPING backups\)" "Yellow"
+      # Keep backups (recovery). machineid.dat is NO LONGER preserved: the machine-id is
+      # now derived from the OS (MachineGuid / machine-id), so it's recomputed on the same
+      # box regardless of the file — keeping a stale/copied file would be misleading.
       Get-ChildItem -LiteralPath $DataRoot -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne 'backups' -and $_.Name -ne 'machineid.dat' } |
+        Where-Object { $_.Name -ne 'backups' } |
         ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     } else {
       Say "Done. PostgreSQL data + backups left intact under $DataRoot." "Green"
@@ -135,6 +136,12 @@ schtasks /Delete /TN SmartTdsCleanup /F
     }
     if ($stalePids.Count -gt 0) { Start-Sleep -Milliseconds 800 }
   } catch { }
+
+  # Delete any leftover machineid.dat — the machine-id is OS-derived now (MachineGuid /
+  # /etc/machine-id), so the file is just a cache. Removing it on install guarantees a
+  # cloned/copied ProgramData can't carry another machine's id; the API regenerates the
+  # correct one (this box's) on first start.
+  try { Remove-Item (Join-Path $DataRoot "machineid.dat") -Force -ErrorAction SilentlyContinue } catch { }
 
   Say "== provisioning database =="
   & (Join-Path $here "provision-local.ps1") `
