@@ -60,12 +60,21 @@ try {
     $ErrorActionPreference = 'SilentlyContinue'
     Say "Removing SmartTds..."
 
-    # 1) KILL processes FIRST — this unlocks the data + pgsql files regardless of
-    #    service state (Stop-Service can fail with "Cannot open service"). Do it before
-    #    deleting services so the purge and MSI file-removal always succeed.
+    # 1) STOP + KILL FIRST — this unlocks the data + pgsql files regardless of service
+    #    state and frees the PG port for any later reinstall. Order matters:
+    #    a) Stop-Service: the clean path while the services still exist.
+    #    b) Kill whatever LISTENS on the PG port: catches an orphaned postmaster whose
+    #       service entry is already gone — Get-Process .Path is NULL for such SYSTEM
+    #       processes, so the old path-filtered kill silently missed it and the next
+    #       install died with "could not bind 127.0.0.1:5433".
+    #    c) Path-filtered kill as the final sweep.
     try {
+      Stop-Service SmartTdsPg, SmartTdsApi -Force -ErrorAction SilentlyContinue
+      $portOwners = @(Get-NetTCPConnection -LocalPort $PgPort -State Listen -ErrorAction SilentlyContinue |
+                      Select-Object -ExpandProperty OwningProcess -Unique)
+      foreach ($ownerPid in $portOwners) { Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue }
       Get-Process postgres -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -and ($_.Path -like "$AppDir*" -or $_.Path -like "$DataRoot*") } |
+        Where-Object { -not $_.Path -or $_.Path -like "$AppDir*" -or $_.Path -like "$DataRoot*" } |
         Stop-Process -Force -ErrorAction SilentlyContinue
       Get-Process SmartTdsApi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     } catch { Say ("process cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
@@ -112,6 +121,21 @@ schtasks /Delete /TN SmartTdsCleanup /F
   }
 
   # 1) provision DB (creates cluster on :PgPort, the 3 DBs, admin user; patches API appsettings.Local.json)
+  # Defensive: a previous failed install/uninstall can leave an orphaned postmaster
+  # holding the PG port (it survived the old path-filtered kill because .Path is NULL
+  # on such SYSTEM processes). Clear the port before provisioning or pg_ctl start dies
+  # with "could not bind 127.0.0.1:<port>".
+  try {
+    Stop-Service SmartTdsPg, SmartTdsApi -Force -ErrorAction SilentlyContinue
+    $stalePids = @(Get-NetTCPConnection -LocalPort $PgPort -State Listen -ErrorAction SilentlyContinue |
+                   Select-Object -ExpandProperty OwningProcess -Unique)
+    foreach ($stalePid in $stalePids) {
+      Say "Killing stale process $stalePid holding port $PgPort" "Yellow"
+      Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+    }
+    if ($stalePids.Count -gt 0) { Start-Sleep -Milliseconds 800 }
+  } catch { }
+
   Say "== provisioning database =="
   & (Join-Path $here "provision-local.ps1") `
       -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `

@@ -50,8 +50,13 @@ if ($Uninstall) {
   # Best-effort: never let cleanup failures block an uninstall.
   try {
     Remove-Svc $ApiServiceName
-    if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
+    # Stop+delete the PG service FIRST: running pg_ctl unregister while the service is
+    # still running deletes the SCM entry but leaves the postmaster process alive and
+    # holding the port — Remove-Svc then finds no service and the orphan blocks the
+    # next install ("could not bind 127.0.0.1:5433"). unregister stays as a fallback
+    # for a registration Remove-Svc could not see.
     Remove-Svc $PgServiceName
+    if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
     & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
     & schtasks.exe /Delete /TN "$BackupTaskName" /F 2>$null | Out-Null
     Say "Uninstalled." "Green"
