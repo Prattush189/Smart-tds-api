@@ -193,6 +193,27 @@ schtasks /Delete /TN SmartTdsCleanup /F
     $x.Save($cfg)
   } else { Say "  (no SmartTdsWinUI.exe.Config at $AppDir - skip; client PCs set ApiBaseUrl to the server's LAN IP)" "Yellow" }
 
+  # FINAL role<->config password sync — runs LAST, after the MSI's file copies, the
+  # provision patch and the restore, so whatever appsettings.Local.json ends up on disk
+  # is what the role password matches. Root cause this heals: the MSI lays down the
+  # PACKAGED appsettings (e.g. a stale dist\api build) with an old password while
+  # provisioning set the role to a fresh random one -> every API call died with
+  # "28P01 password authentication failed". Re-read the file, ALTER ROLE to its value,
+  # bounce the API so it reconnects.
+  try {
+    $cfgFinal = Join-Path $apiDir "appsettings.Local.json"
+    if (Test-Path $cfgFinal) {
+      $apiPwFinal = (Get-Content $cfgFinal -Raw | ConvertFrom-Json).Db.Password
+      if ($apiPwFinal) {
+        $env:PGPASSWORD = "postgres"
+        & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d postgres `
+          -c ("alter role smarttds_app password '" + $apiPwFinal.Replace("'","''") + "'") | Out-Null
+        Restart-Service SmartTdsApi -ErrorAction SilentlyContinue
+        Say "Final role<->config password sync done."
+      }
+    }
+  } catch { Say ("final password sync warning (ignored): " + $_.Exception.Message) "Yellow" }
+
   Say "`nINSTALL COMPLETE." "Green"
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
   Say ("  Login : {0} / (the admin password set during install)   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser)
