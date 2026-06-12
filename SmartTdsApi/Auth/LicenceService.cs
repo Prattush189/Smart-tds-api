@@ -284,9 +284,9 @@ public sealed class LicenceService
     //   Windows: HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid (unique per Windows
     //            install — survives NIC swaps; changes only on an OS reinstall)
     //   Linux:   /etc/machine-id (the standard stable per-install identity; VPS)
-    // machineid.dat is kept ONLY as (a) a diagnostics copy of the current id and
-    // (b) the fallback when no hardware identity is readable. On a cloned box the
-    // copied file is ignored and overwritten with that box's own hardware id.
+    // machineid.dat is NOT written on the normal path — it exists ONLY on machines
+    // where no hardware identity is readable (last-resort fallback). A copied file
+    // is ignored wherever a hardware identity exists.
     private string GetOrCreateMachineId()
     {
         var path = _opt.MachineIdFile;
@@ -299,9 +299,10 @@ public sealed class LicenceService
         var hw = TryHardwareIdentity();
         if (hw is not null)
         {
-            var hwId = Hash16("SmartTds.MachineId.v2|" + hw);
-            TryPersistId(path, hwId);   // best-effort cache for support + the fallback below
-            return hwId;
+            // Pure computation — machineid.dat is NOT written on the normal path. The id
+            // is logged at startup ("Licensing mode=... machineId=...") for support; the
+            // file only exists on machines where no hardware identity is readable.
+            return Hash16("SmartTds.MachineId.v2|" + hw);
         }
 
         // No hardware identity readable (rare) — fall back to the persisted id so the
