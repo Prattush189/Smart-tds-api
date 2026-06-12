@@ -272,7 +272,17 @@ public sealed class LicenceService
 
     private static string X(string? s) => System.Security.SecurityElement.Escape(s ?? "") ?? "";
 
-    // ---- stable, persisted machine id (binds the licence to this server) ----
+    // ---- machine id (binds the licence to this server) ----
+    // HARDWARE-FIRST, recomputed on EVERY start — the legacy Pump.cs model (it hashed
+    // the BIOS serial each run). A previous version trusted a persisted machineid.dat,
+    // which is just a file: copying ProgramData\SmartTds to a second server cloned the
+    // licence identity. Now the id derives from the machine itself:
+    //   Windows: HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid (unique per Windows
+    //            install — survives NIC swaps; changes only on an OS reinstall)
+    //   Linux:   /etc/machine-id (the standard stable per-install identity; VPS)
+    // machineid.dat is kept ONLY as (a) a diagnostics copy of the current id and
+    // (b) the fallback when no hardware identity is readable. On a cloned box the
+    // copied file is ignored and overwritten with that box's own hardware id.
     private string GetOrCreateMachineId()
     {
         var path = _opt.MachineIdFile;
@@ -281,6 +291,18 @@ public sealed class LicenceService
             var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds");
             path = Path.Combine(dir, "machineid.dat");
         }
+
+        var hw = TryHardwareIdentity();
+        if (hw is not null)
+        {
+            var hwId = Hash16("SmartTds.MachineId.v2|" + hw);
+            TryPersistId(path, hwId);   // best-effort cache for support + the fallback below
+            return hwId;
+        }
+
+        // No hardware identity readable (rare) — fall back to the persisted id so the
+        // licence keeps working, creating it once if missing.
+        _log.LogWarning("No hardware machine identity readable; falling back to {Path}", path);
         try
         {
             if (File.Exists(path))
@@ -292,15 +314,46 @@ public sealed class LicenceService
         catch { /* fall through to (re)create */ }
 
         var seed = TryHardwareSeed() ?? Guid.NewGuid().ToString("N");
-        var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(seed))).Substring(0, 16);
+        var id = Hash16(seed);
+        TryPersistId(path, id);
+        return id;
+    }
+
+    /// <summary>OS-install-bound identity: Windows MachineGuid / Linux /etc/machine-id.</summary>
+    private static string? TryHardwareIdentity()
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                var guid = Microsoft.Win32.Registry.GetValue(
+                    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography", "MachineGuid", null) as string;
+                if (!string.IsNullOrWhiteSpace(guid)) return "winguid:" + guid.Trim();
+            }
+            else if (File.Exists("/etc/machine-id"))
+            {
+                var mid = File.ReadAllText("/etc/machine-id").Trim();
+                if (mid.Length > 0) return "linuxid:" + mid;
+            }
+        }
+        catch { /* unreadable -> caller falls back to the persisted id */ }
+        return null;
+    }
+
+    private static string Hash16(string seed)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(seed))).Substring(0, 16);
+
+    private void TryPersistId(string path, string id)
+    {
         try
         {
             var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(path, id);
+            // Only rewrite when changed, so the file's timestamp stays meaningful.
+            if (!File.Exists(path) || File.ReadAllText(path).Trim() != id)
+                File.WriteAllText(path, id);
         }
-        catch (Exception ex) { _log.LogWarning(ex, "Could not persist machineId to {Path}; using in-memory id", path); }
-        return id;
+        catch (Exception ex) { _log.LogWarning(ex, "Could not persist machineId to {Path}", path); }
     }
 
     private static string? TryHardwareSeed()
