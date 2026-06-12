@@ -3,8 +3,11 @@ using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Xml.Linq;
+using Dapper;
 using Microsoft.Extensions.Options;
+using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Auth;
 
@@ -24,36 +27,151 @@ public sealed class LicenceService
 
     private readonly LicensingOptions _opt;
     private readonly IHttpClientFactory _http;
+    private readonly IDbConnectionFactory _db;
     private readonly ILogger<LicenceService> _log;
     private readonly ConcurrentDictionary<string, LicenceResult> _cache = new();
 
     public string MachineId { get; }
 
-    public LicenceService(IOptions<LicensingOptions> opt, IHttpClientFactory http, ILogger<LicenceService> log)
+    public LicenceService(IOptions<LicensingOptions> opt, IHttpClientFactory http,
+        IDbConnectionFactory db, ILogger<LicenceService> log)
     {
-        _opt = opt.Value; _http = http; _log = log;
+        _opt = opt.Value; _http = http; _db = db; _log = log;
         MachineId = GetOrCreateMachineId();
         _log.LogInformation("Licensing mode={Mode} machineId={Mid}", _opt.Mode, MachineId);
     }
 
-    /// <summary>Validate a licence key. Cached successes skip the network call within RecheckHours.</summary>
+    /// <summary>
+    /// Validate a licence key. Three layers, mirroring the legacy desktop Pump.cs flow:
+    ///  1. in-memory cache (RecheckHours) — skips everything;
+    ///  2. the encrypted blob persisted in applicationparams.auth (Pump's EncryptToDb) —
+    ///     survives API restarts, machine-bound, trusted within RecheckHours;
+    ///  3. live ServiceUL call. Success refreshes the blob; an UNREACHABLE service falls
+    ///     back to the blob for up to GraceDays (Pump's offline window); a hard rejection
+    ///     (invalid / expired / bound elsewhere) WIPES the blob (Pump's WriteToDb("")).
+    /// </summary>
     public async Task<LicenceResult> ValidateAsync(string prodKey, CancellationToken ct)
     {
         var key = (prodKey ?? "").Trim().ToUpperInvariant();
         if (key.Length == 0) return LicenceResult.Fail("Licence key is required.");
 
+        // All licence maths uses the TRUSTED date (port of legacy ImpData.GetDtOnline) —
+        // never the box's own clock, which a LAN customer could roll back to stretch
+        // grace / expiry.
+        var nowUtc = await TrustedUtcNowAsync(ct);
+
         if (_cache.TryGetValue(key, out var cached)
             && cached.Allowed
-            && cached.CheckedUtc.AddHours(Math.Max(1, _opt.RecheckHours)) > DateTime.UtcNow)
+            && cached.CheckedUtc.AddHours(Math.Max(1, _opt.RecheckHours)) > nowUtc)
             return cached;
 
-        var result = await CallServiceAsync(key, ct);
-        if (result.Allowed) _cache[key] = result;   // only cache good results
+        // Layer 2: the persisted blob (validates key + machine-id + expiry on load).
+        var stored = await LoadStoredAsync(key, nowUtc, ct);
+        if (stored is not null
+            && stored.CheckedUtc.AddHours(Math.Max(1, _opt.RecheckHours)) > nowUtc)
+        {
+            var fromDb = new LicenceResult(true, stored.Status, stored.Expiry, stored.RegisteredTo, "OK", stored.CheckedUtc);
+            _cache[key] = fromDb;
+            return fromDb;
+        }
+
+        // Layer 3: live check.
+        var result = await CallServiceAsync(key, nowUtc, ct);
+        if (result.Allowed)
+        {
+            _cache[key] = result;
+            // Persist PAID results only — Pump always re-validated Demo against the service,
+            // so a demo licence gets no offline grace.
+            if (!IsDemo(result.Status)) await PersistAsync(key, result, ct);
+            return result;
+        }
+
+        // Unreachable (network/DNS/down — NOT a rejection): Pump's offline grace.
+        if (result.Status == "Error" && stored is not null
+            && stored.CheckedUtc.AddDays(Math.Max(1, _opt.GraceDays)) > nowUtc)
+        {
+            var grace = new LicenceResult(true, stored.Status, stored.Expiry, stored.RegisteredTo,
+                "Licence server unreachable — allowed from the last successful validation (offline grace).",
+                stored.CheckedUtc);
+            _cache[key] = grace;
+            _log.LogWarning("Licence {Key}: ServiceUL unreachable; allowed via offline grace (last check {When:u})",
+                key, stored.CheckedUtc);
+            return grace;
+        }
+
+        // Hard rejection: wipe the blob so the grace window can't resurrect a dead licence.
+        if (result.Status != "Error") await WipeAsync(key, ct);
         return result;
     }
 
+    private static bool IsDemo(string status)
+        => (status ?? "").IndexOf("Demo", StringComparison.OrdinalIgnoreCase) >= 0;
+
+    // ---- trusted date (port of legacy ImpData.GetDtOnline) ----
+    // The legacy desktop never trusted the PC clock for licence maths — it fetched the
+    // date from smartbizin's DateService, then NIST, then (only as a last resort) the
+    // local clock. Same chain here: the smartbizin hosts' HTTP Date response header
+    // (same servers, no SOAP contract needed) -> NIST daytime -> local UTC. The offset
+    // is cached for an hour keyed on Environment.TickCount64, which keeps counting
+    // monotonically even if someone changes the system clock mid-run.
+    private readonly object _timeLock = new();
+    private long _trustedAtTicks = -1;
+    private TimeSpan _trustedOffset = TimeSpan.Zero;
+
+    private async Task<DateTime> TrustedUtcNowAsync(CancellationToken ct)
+    {
+        lock (_timeLock)
+        {
+            if (_trustedAtTicks >= 0 && Environment.TickCount64 - _trustedAtTicks < 3_600_000)
+                return DateTime.UtcNow + _trustedOffset;
+        }
+
+        var fetched = await FetchNetworkUtcAsync(ct);
+        lock (_timeLock)
+        {
+            _trustedOffset = fetched.HasValue ? fetched.Value - DateTime.UtcNow : TimeSpan.Zero;
+            _trustedAtTicks = Environment.TickCount64;
+            return DateTime.UtcNow + _trustedOffset;
+        }
+    }
+
+    private async Task<DateTime?> FetchNetworkUtcAsync(CancellationToken ct)
+    {
+        // 1) HTTP Date header from the smartbizin hosts (the legacy DateService servers).
+        foreach (var url in _opt.ServiceUrls)
+        {
+            try
+            {
+                var client = _http.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(5);
+                using var req = new HttpRequestMessage(HttpMethod.Head, new Uri(new Uri(url), "/"));
+                using var resp = await client.SendAsync(req, ct);
+                if (resp.Headers.Date.HasValue) return resp.Headers.Date.Value.UtcDateTime;
+            }
+            catch { /* try next source */ }
+        }
+        // 2) NIST daytime protocol — the exact legacy fallback (time.nist.gov:13).
+        try
+        {
+            using var tcp = new System.Net.Sockets.TcpClient();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            await tcp.ConnectAsync("time.nist.gov", 13, cts.Token);
+            using var sr = new StreamReader(tcp.GetStream());
+            var response = await sr.ReadToEndAsync(cts.Token);
+            // "JJJJJ YY-MM-DD HH:MM:SS TT L H msADV UTC(NIST) *"
+            var utcText = response.Substring(7, 17);
+            return DateTime.ParseExact(utcText, "yy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal);
+        }
+        catch { /* fall through */ }
+        // 3) last resort: the box clock (legacy did the same).
+        _log.LogDebug("No network time source reachable; falling back to the local clock");
+        return null;
+    }
+
     // ---- ServiceUL SOAP call (primary then fallback) ----
-    private async Task<LicenceResult> CallServiceAsync(string prodKey, CancellationToken ct)
+    private async Task<LicenceResult> CallServiceAsync(string prodKey, DateTime nowUtc, CancellationToken ct)
     {
         var body =
             $"<s:Envelope xmlns:s=\"{Soap11}\" xmlns:t=\"{Tempuri}\"><s:Body>" +
@@ -87,7 +205,7 @@ public sealed class LicenceService
                 }
                 var arr = ParseResult(xml);
                 if (arr.Count == 0) { _log.LogWarning("ServiceUL {Url} -> empty result", url); continue; }
-                return Interpret(arr);
+                return Interpret(arr, nowUtc);
             }
             catch (Exception ex)
             {
@@ -98,12 +216,12 @@ public sealed class LicenceService
     }
 
     // ---- map the ServiceUL string[] to a verdict (mirrors legacy Pump.CallValidationService) ----
-    private LicenceResult Interpret(IReadOnlyList<string> res)
+    private LicenceResult Interpret(IReadOnlyList<string> res, DateTime nowUtc)
     {
         string status = res[0] ?? "";
         var expiry = res.Count > 5 ? ParseDate(res[5]) : null;
         var registeredTo = res.Count > 8 ? (res[8] ?? "") : "";
-        var today = DateTime.UtcNow.Date;
+        var today = nowUtc.Date;   // trusted date, not the box clock
 
         // Online (shared cloud): a key already bound to another machine is OK if not expired.
         if (_opt.IsOnline && status.Contains("Product Key Already in use", StringComparison.OrdinalIgnoreCase)
@@ -114,19 +232,19 @@ public sealed class LicenceService
         {
             if (expiry.HasValue && expiry.Value.Date < today)
                 return new LicenceResult(false, status, expiry, registeredTo,
-                    $"Licence expired on {expiry:dd MMM yyyy}. Kindly contact your dealer to renew.", DateTime.UtcNow);
-            return new LicenceResult(true, status, expiry, registeredTo, "OK", DateTime.UtcNow);
+                    $"Licence expired on {expiry:dd MMM yyyy}. Kindly contact your dealer to renew.", nowUtc);
+            return new LicenceResult(true, status, expiry, registeredTo, "OK", nowUtc);
         }
         if (status.Contains("Your Demo will expire in", StringComparison.OrdinalIgnoreCase))
-            return new LicenceResult(true, status, expiry, registeredTo, "Demo version.", DateTime.UtcNow);
+            return new LicenceResult(true, status, expiry, registeredTo, "Demo version.", nowUtc);
         if (status == "GetLost")
-            return new LicenceResult(false, status, expiry, registeredTo, "Product key is either invalid or expired.", DateTime.UtcNow);
+            return new LicenceResult(false, status, expiry, registeredTo, "Product key is either invalid or expired.", nowUtc);
         if (status.StartsWith("Licence Expired", StringComparison.OrdinalIgnoreCase))
-            return new LicenceResult(false, status, expiry, registeredTo, "Licence expired. Kindly renew.", DateTime.UtcNow);
+            return new LicenceResult(false, status, expiry, registeredTo, "Licence expired. Kindly renew.", nowUtc);
 
         // anything else: deny, surface the server's message
         return new LicenceResult(false, status, expiry, registeredTo,
-            string.IsNullOrWhiteSpace(status) ? "Licence validation failed." : status, DateTime.UtcNow);
+            string.IsNullOrWhiteSpace(status) ? "Licence validation failed." : status, nowUtc);
     }
 
     private static List<string> ParseResult(string xml)
@@ -198,5 +316,105 @@ public sealed class LicenceService
             return string.IsNullOrWhiteSpace(mac) ? null : mac;
         }
         catch { return null; }
+    }
+
+    // ---- persisted licence blob in applicationparams (port of Pump.cs EncryptToDb /
+    // DecryptFromDb / WriteToDb("")). AES key is derived from THIS machine's id, so a
+    // DB copied to another machine can't reuse the blob — same effect as Pump's
+    // stored-_pcId-vs-regenerated check, enforced by the crypto itself. ----
+
+    private sealed record StoredLicence(
+        string Key, string MachineId, string Status, string RegisteredTo, DateTime? Expiry, DateTime CheckedUtc);
+
+    // Local = one firm per server -> the legacy 'auth' row. Online = shared masterdbtds,
+    // many firms -> one row per licence key ('auth:<KEY>').
+    private string AuthRowName(string key) => _opt.IsLocal ? "auth" : "auth:" + key;
+
+    private async Task<StoredLicence?> LoadStoredAsync(string key, DateTime nowUtc, CancellationToken ct)
+    {
+        try
+        {
+            using var conn = await _db.OpenMasterAsync(ct);
+            var blob = await conn.QueryFirstOrDefaultAsync<string>(new CommandDefinition(
+                "select value from applicationparams where name=@n limit 1",
+                new { n = AuthRowName(key) }, cancellationToken: ct));
+            if (string.IsNullOrWhiteSpace(blob)) return null;
+
+            var s = JsonSerializer.Deserialize<StoredLicence>(DecryptBlob(blob));
+            if (s is null) return null;
+            if (!string.Equals(s.Key, key, StringComparison.OrdinalIgnoreCase)) return null;        // key changed -> revalidate
+            if (!string.Equals(s.MachineId, MachineId, StringComparison.OrdinalIgnoreCase)) return null; // machine changed -> revalidate
+            if (s.Expiry.HasValue && s.Expiry.Value.Date < nowUtc.Date) return null;                // expired -> no grace
+            if (s.CheckedUtc > nowUtc.AddHours(2)) return null;   // blob from "the future" = clock rolled back -> revalidate
+            return s;
+        }
+        catch (Exception ex)
+        {
+            // Unreadable blob (legacy Pump format, different machine, manual edit) — not an
+            // error: just fall through to a live ServiceUL validation, which rewrites it.
+            _log.LogDebug(ex, "Stored licence blob for {Key} unreadable; will revalidate", key);
+            return null;
+        }
+    }
+
+    private async Task PersistAsync(string key, LicenceResult res, CancellationToken ct)
+    {
+        try
+        {
+            var payload = JsonSerializer.Serialize(
+                new StoredLicence(key, MachineId, res.Status, res.RegisteredTo, res.Expiry, res.CheckedUtc));
+            await UpsertParamAsync(AuthRowName(key), EncryptBlob(payload), ct);
+        }
+        catch (Exception ex)
+        {
+            // Persistence is belt-and-braces; never let it block a successful login.
+            _log.LogWarning(ex, "Could not persist licence blob for {Key}", key);
+        }
+    }
+
+    private async Task WipeAsync(string key, CancellationToken ct)
+    {
+        try { await UpsertParamAsync(AuthRowName(key), "", ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "Could not wipe licence blob for {Key}", key); }
+    }
+
+    private async Task UpsertParamAsync(string name, string value, CancellationToken ct)
+    {
+        using var conn = await _db.OpenMasterAsync(ct);
+        var n = await conn.ExecuteAsync(new CommandDefinition(
+            "update applicationparams set value=@v where name=@n",
+            new { v = value, n = name }, cancellationToken: ct));
+        if (n == 0)
+            await conn.ExecuteAsync(new CommandDefinition(
+                "insert into applicationparams (name, value) values (@n, @v)",
+                new { v = value, n = name }, cancellationToken: ct));
+    }
+
+    private byte[] BlobKey()
+        => SHA256.HashData(Encoding.UTF8.GetBytes("SmartTds.LicenceBlob.v1|" + MachineId));
+
+    private string EncryptBlob(string plaintext)
+    {
+        using var aes = Aes.Create();
+        aes.Key = BlobKey();
+        aes.GenerateIV();
+        using var enc = aes.CreateEncryptor();
+        var data = Encoding.UTF8.GetBytes(plaintext);
+        var cipher = enc.TransformFinalBlock(data, 0, data.Length);
+        var raw = new byte[aes.IV.Length + cipher.Length];
+        Buffer.BlockCopy(aes.IV, 0, raw, 0, aes.IV.Length);
+        Buffer.BlockCopy(cipher, 0, raw, aes.IV.Length, cipher.Length);
+        return Convert.ToBase64String(raw);
+    }
+
+    private string DecryptBlob(string blob)
+    {
+        var raw = Convert.FromBase64String(blob);
+        using var aes = Aes.Create();
+        aes.Key = BlobKey();
+        aes.IV = raw.AsSpan(0, 16).ToArray();
+        using var dec = aes.CreateDecryptor();
+        var plain = dec.TransformFinalBlock(raw, 16, raw.Length - 16);
+        return Encoding.UTF8.GetString(plain);
     }
 }

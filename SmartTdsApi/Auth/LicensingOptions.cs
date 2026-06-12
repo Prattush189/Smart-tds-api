@@ -24,6 +24,10 @@ public sealed class LicensingOptions
     /// <summary>How long a successful ServiceUL result is cached before re-validating.</summary>
     public int RecheckHours { get; set; } = 24;
 
+    /// <summary>Days a previously-validated licence keeps working when ServiceUL is
+    /// unreachable (the legacy Pump.cs offline window, persisted in applicationparams.auth).</summary>
+    public int GraceDays { get; set; } = 5;
+
     /// <summary>Override the persisted machine-id file path (default: ProgramData\SmartTds\machineid.dat).</summary>
     public string? MachineIdFile { get; set; }
 

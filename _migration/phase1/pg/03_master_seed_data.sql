@@ -6,10 +6,14 @@
 -- identity sequences reset at the end.
 -- =====================================================================
 BEGIN;
-INSERT INTO applicationparams (id, name, value) VALUES (1, 'auth', '0+YpdQZbXjn9MhW+xv315cTSkOZSpZChY7IqgAJ6UkOIzNG38meuFHrxHKa/nMNzmBWQQcJwwl8kfociGXlaSA==');
+-- 'auth' = legacy desktop (Pump.cs) licence blob — dead in API mode (licence is validated
+-- server-side now). Seed it EMPTY so installs don't ship the developer's licence binding.
+INSERT INTO applicationparams (id, name, value) VALUES (1, 'auth', '');
 INSERT INTO applicationparams (id, name, value) VALUES (2, 'ver', '1.000');
-INSERT INTO applicationparams (id, name, value) VALUES (3, 'backupLoc', 'C:\Tds VScode\ProjectTDS\SmartTdsWinUI\bin\SmartTdsBackups');
-INSERT INTO applicationparams (id, name, value) VALUES (4, 'lastBackup', '18/03/2026');
+-- backupLoc / lastBackup are populated at runtime by the backup job (the dev's path/date
+-- must not ship). Seed them EMPTY.
+INSERT INTO applicationparams (id, name, value) VALUES (3, 'backupLoc', '');
+INSERT INTO applicationparams (id, name, value) VALUES (4, 'lastBackup', '');
 INSERT INTO aymaster (id, ayid, name, startdt, enddt, nonbusinc, businc, auditcase, compcase, case94e, advinst1, advinst2, advinst3, advinst4, updnonbusinc, updbusinc, updauditcase, updcompcase, updcase94e) VALUES (5, 25, '2025-2026', '01/04/2025', '31/03/2026', '15/09/2026', '15/09/2026', '31/10/2026', '31/10/2026', '30/11/2026', '15/06/2025', '15/09/2025', '15/12/2025', '15/03/2026', '31/03/2031', '31/03/2031', '31/03/2031', '31/03/2031', '31/03/2031');
 INSERT INTO aymaster (id, ayid, name, startdt, enddt, nonbusinc, businc, auditcase, compcase, case94e, advinst1, advinst2, advinst3, advinst4, updnonbusinc, updbusinc, updauditcase, updcompcase, updcase94e) VALUES (7, 26, '2026-2027', '01/04/2026', '31/03/2027', '15/09/2027', '15/09/2027', '31/10/2027', '31/10/2027', '30/11/2027', '15/06/2026', '15/09/2026', '15/12/2026', '15/03/2027', '31/03/2032', '31/03/2032', '31/03/2032', '31/03/2032', '31/03/2032');
 INSERT INTO check_period (id, quarter, month, ayid) VALUES (1, 1, 4, 0);
