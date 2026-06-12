@@ -323,26 +323,79 @@ public sealed class LicenceService
         return id;
     }
 
-    /// <summary>OS-install-bound identity: Windows MachineGuid / Linux /etc/machine-id.</summary>
+    /// <summary>
+    /// OS-install-bound identity with a Pump.cs-style fallback ladder (the legacy
+    /// desktop fell back BIOS serial -> drive id -> registry). Each rung is tried
+    /// independently; only when ALL fail does the caller use the persisted file.
+    ///   Windows: MachineGuid -> ComputerHardwareId -> ProductId+InstallDate
+    ///            -> system-volume serial ("drive id")
+    ///   Linux:   /etc/machine-id -> /var/lib/dbus/machine-id
+    /// Sources are prefix-tagged so two different sources can never hash alike.
+    /// </summary>
     private static string? TryHardwareIdentity()
     {
-        try
+        if (OperatingSystem.IsWindows())
         {
-            if (OperatingSystem.IsWindows())
+            try
             {
                 var guid = Microsoft.Win32.Registry.GetValue(
                     @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Cryptography", "MachineGuid", null) as string;
                 if (!string.IsNullOrWhiteSpace(guid)) return "winguid:" + guid.Trim();
             }
-            else if (File.Exists("/etc/machine-id"))
+            catch { }
+            try
             {
-                var mid = File.ReadAllText("/etc/machine-id").Trim();
-                if (mid.Length > 0) return "linuxid:" + mid;
+                // Hardware-derived GUID Windows computes from SMBIOS (BIOS/board) data.
+                var hw = Microsoft.Win32.Registry.GetValue(
+                    @"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\SystemInformation",
+                    "ComputerHardwareId", null) as string;
+                if (!string.IsNullOrWhiteSpace(hw)) return "winhw:" + hw.Trim();
+            }
+            catch { }
+            try
+            {
+                // Windows licence identity + install timestamp — stable per OS install.
+                const string cv = @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+                var pid = Microsoft.Win32.Registry.GetValue(cv, "ProductId", null) as string;
+                var inst = Microsoft.Win32.Registry.GetValue(cv, "InstallDate", null);
+                if (!string.IsNullOrWhiteSpace(pid)) return "winpid:" + pid.Trim() + "|" + inst;
+            }
+            catch { }
+            try
+            {
+                // The legacy Pump "drive id": serial of the system volume. Last hardware
+                // rung — it changes on a format, but a format means OS reinstall anyway.
+                var root = Path.GetPathRoot(Environment.SystemDirectory);
+                if (root is not null
+                    && GetVolumeInformationW(root, null, 0, out var serial, out _, out _, null, 0)
+                    && serial != 0)
+                    return "windrive:" + serial.ToString("X8");
+            }
+            catch { }
+        }
+        else
+        {
+            foreach (var p in new[] { "/etc/machine-id", "/var/lib/dbus/machine-id" })
+            {
+                try
+                {
+                    if (File.Exists(p))
+                    {
+                        var mid = File.ReadAllText(p).Trim();
+                        if (mid.Length > 0) return "linuxid:" + mid;
+                    }
+                }
+                catch { }
             }
         }
-        catch { /* unreadable -> caller falls back to the persisted id */ }
         return null;
     }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = false)]
+    private static extern bool GetVolumeInformationW(
+        string lpRootPathName, StringBuilder? lpVolumeNameBuffer, int nVolumeNameSize,
+        out uint lpVolumeSerialNumber, out uint lpMaximumComponentLength, out uint lpFileSystemFlags,
+        StringBuilder? lpFileSystemNameBuffer, int nFileSystemNameSize);
 
     private static string Hash16(string seed)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(seed))).Substring(0, 16);
