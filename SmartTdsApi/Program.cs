@@ -20,6 +20,15 @@ var builder = WebApplication.CreateBuilder(args);
 // so appsettings*.json resolve. On the Linux VPS (systemd) this does nothing. ----
 builder.Host.UseWindowsService();
 
+// ---- Support file log: every Warning+ (incl. the unhandled-exception handler's
+// full stack traces) also lands in a daily file the user can just send us —
+// Windows: C:\ProgramData\SmartTds\logs\api-<yyyyMMdd>.log (same folder as the
+// install log); Linux VPS: <app>/logs. Event Log / journalctl keep working. ----
+var supportLogDir = OperatingSystem.IsWindows()
+    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds", "logs")
+    : Path.Combine(AppContext.BaseDirectory, "logs");
+builder.Logging.AddProvider(new SmartTdsApi.Logging.FileLoggerProvider(supportLogDir));
+
 // ---- Options (env vars override, e.g. Db__Password, Jwt__Key) ----
 builder.Services.Configure<DbOptions>(builder.Configuration.GetSection("Db"));
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
