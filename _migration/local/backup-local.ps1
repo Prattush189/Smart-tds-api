@@ -81,6 +81,20 @@ try {
 }
 finally { Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue }
 
+# ---- record where/when in applicationparams (backupLoc + lastBackup) ----
+# The desktop's Backup/Restore screen reads these to show the folder + last-backup date.
+# Best-effort: a failure here must never fail the backup itself.
+try {
+  $locEsc = $BackupRoot -replace "'","''"
+  $today  = Get-Date -Format "dd/MM/yyyy"
+  $recSql = "update applicationparams set value='$locEsc' where name='backupLoc';" +
+            "insert into applicationparams(name,value) select 'backupLoc','$locEsc' where not exists (select 1 from applicationparams where name='backupLoc');" +
+            "update applicationparams set value='$today' where name='lastBackup';" +
+            "insert into applicationparams(name,value) select 'lastBackup','$today' where not exists (select 1 from applicationparams where name='lastBackup');"
+  $rec = Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d","masterdbtds","-c",$recSql)
+  if ($rec.Code -ne 0) { Write-Host "  (warn) could not record backupLoc/lastBackup: $($rec.Out)" -ForegroundColor Yellow }
+} catch { Write-Host "  (warn) could not record backupLoc/lastBackup: $($_.Exception.Message)" -ForegroundColor Yellow }
+
 # ---- retention: keep the newest $Keep zips of THIS label ----
 if ($Keep -gt 0) {
   $old = Get-ChildItem $BackupRoot -Filter ("SmartTdsBackup_*{0}_*.zip" -f $Label) -ErrorAction SilentlyContinue |

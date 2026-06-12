@@ -48,6 +48,12 @@ archive="$BACKUP_DIR/SmartTdsBackup_vps_${stamp}.tar.gz"
 tar -czf "$archive" -C "$work" .
 echo "  -> $archive"
 
+# record where/when in applicationparams (backupLoc + lastBackup) — read by the
+# desktop's Backup/Restore screen. Best-effort: never fail the backup over this.
+today="$(date +%d/%m/%Y)"
+"$PSQL" -d masterdbtds -c "update applicationparams set value='${BACKUP_DIR}' where name='backupLoc'; insert into applicationparams(name,value) select 'backupLoc','${BACKUP_DIR}' where not exists (select 1 from applicationparams where name='backupLoc'); update applicationparams set value='${today}' where name='lastBackup'; insert into applicationparams(name,value) select 'lastBackup','${today}' where not exists (select 1 from applicationparams where name='lastBackup');" \
+  || echo "  (warn) could not record backupLoc/lastBackup"
+
 # retention: keep newest $KEEP archives
 ls -1t "$BACKUP_DIR"/SmartTdsBackup_vps_*.tar.gz 2>/dev/null | tail -n +$((KEEP+1)) | while read -r old; do
   echo "  pruned $old"; rm -f "$old"
