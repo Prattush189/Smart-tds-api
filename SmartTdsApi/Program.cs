@@ -48,6 +48,9 @@ builder.Services.AddSingleton<LicenceService>();
 // Local-mode pg_dump/pg_restore backup feature (no-op binding in Online mode).
 builder.Services.Configure<SmartTdsApi.Endpoints.BackupOptions>(builder.Configuration.GetSection("Backup"));
 
+// Vendor support registry. Endpoint is OFF unless Support:Key is set (only the central VPS sets it).
+builder.Services.Configure<SmartTdsApi.Endpoints.SupportOptions>(builder.Configuration.GetSection("Support"));
+
 // ---- Tolerant JSON body-binding for the legacy desktop client ----
 // The WinForms app (Newtonsoft, loose typing) sends e.g. "DirFlag":"false" (string, not bool),
 // "" for absent numbers, and quoted numbers. System.Text.Json is strict and 400s on those with
@@ -232,6 +235,7 @@ app.MapPayeeEndpoints();
 app.MapSalaryEndpoints();
 app.MapTdsEntryEndpoints();
 app.MapBackupEndpoints();
+app.MapSupportEndpoints();
 
 // Local mode: self-apply any pending schema migrations on startup (idempotent).
 SmartTdsApi.Endpoints.BackupEndpoints.RunMigrationsOnStartup(app.Services);

@@ -32,7 +32,9 @@ param(
   [switch] $Lan,                                  # open the API port for the office LAN
   [switch] $Uninstall,
   [switch] $PurgeData,                            # on uninstall, delete the PG data (KEEPS the backups\ folder)
-  [switch] $RestoreLatestIfFound                  # on install, if a backup exists and the DB is fresh, restore the newest
+  [switch] $RestoreLatestIfFound,                 # on install, if a backup exists and the DB is fresh, restore the newest
+  [string] $SupportUrl = "",                      # vendor support registry base URL (https only); empty = don't report
+  [string] $SupportKey = ""                       # shared key the registry endpoint expects (X-Support-Key)
 )
 $ErrorActionPreference = "Stop"
 function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
@@ -233,6 +235,41 @@ schtasks /Delete /TN SmartTdsCleanup /F
     & icacls.exe "$DataRoot" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q | Out-Null
     Say "Locked down $DataRoot to SYSTEM + Administrators."
   } catch { Say ("ACL hardening warning (ignored): " + $_.Exception.Message) "Yellow" }
+
+  # ---- Best-effort: report this install's DB creds to the central vendor registry ----
+  # Lets support recover a client's PostgreSQL credentials remotely. OFF unless -SupportUrl
+  # (+ -SupportKey) is configured; REQUIRES https so creds never travel in clear text; and
+  # NEVER blocks the install (no internet / endpoint down -> silently skipped). The endpoint
+  # stores the creds AES-encrypted and is itself disabled unless the VPS sets Support__Key.
+  if ($SupportUrl) {
+    if ($SupportUrl -notlike 'https://*') {
+      Say "Support registry skipped: -SupportUrl must be https (refusing to send DB creds over http)." "Yellow"
+    } else {
+      try {
+        # Match the API's machine-id (SHA256('SmartTds.MachineId.v2|winguid:'+MachineGuid)[..16]).
+        $guid = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid
+        $sha  = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
+                  [System.Text.Encoding]::UTF8.GetBytes("SmartTds.MachineId.v2|winguid:$guid"))
+        $mid  = ([System.BitConverter]::ToString($sha) -replace '-','').Substring(0,16)
+        $appPw = $null
+        try { $appPw = (Get-Content (Join-Path $apiDir "appsettings.Local.json") -Raw | ConvertFrom-Json).Db.Password } catch {}
+        $payload = @{
+          machineId   = $mid
+          machineName = $env:COMPUTERNAME
+          dbPort      = $PgPort
+          superUser   = "postgres"
+          superPwd    = "postgres"     # local superuser pw (see provision-local.ps1)
+          appRoleUser = "smarttds_app"
+          appRolePwd  = $appPw
+          appVersion  = ""
+        } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Method Post -Uri ($SupportUrl.TrimEnd('/') + '/api/support/install') `
+          -Headers @{ 'X-Support-Key' = $SupportKey } -ContentType 'application/json' `
+          -Body $payload -TimeoutSec 15 | Out-Null
+        Say "Reported DB creds to the support registry."
+      } catch { Say ("support registry skipped (non-fatal): " + $_.Exception.Message) "Yellow" }
+    }
+  }
 
   Say "`nINSTALL COMPLETE." "Green"
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
