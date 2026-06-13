@@ -124,20 +124,54 @@ schtasks /Delete /TN SmartTdsCleanup /F
   }
 
   # 1) provision DB (creates cluster on :PgPort, the 3 DBs, admin user; patches API appsettings.Local.json)
-  # Defensive: a previous failed install/uninstall can leave an orphaned postmaster
-  # holding the PG port (it survived the old path-filtered kill because .Path is NULL
-  # on such SYSTEM processes). Clear the port before provisioning or pg_ctl start dies
-  # with "could not bind 127.0.0.1:<port>".
+  # CLEAN SLATE before provisioning. A previous install/uninstall can leave behind:
+  #   (a) an orphaned postmaster holding the PG port (survives a path-filtered kill because
+  #       .Path is NULL for SYSTEM processes) -> pg_ctl start dies "could not bind 127.0.0.1",
+  #   (b) the OLD SmartTdsPg / SmartTdsApi SERVICES still registered. This is the one that
+  #       bites re-installs: install-service.ps1 SKIPS re-registering a service that already
+  #       exists, so a leftover SmartTdsPg keeps pointing at the PREVIOUS data dir/port and
+  #       the freshly provisioned cluster is never served — and a half-removed service makes
+  #       the MSI custom action fail outright ("a program run as part of the setup ...").
+  # So we STOP + KILL + DELETE both services (and unregister PG) here, so install-service.ps1
+  # registers them fresh against this install's cluster.
+  # EAP=Continue locally: sc.exe / pg_ctl write to stderr, which under EAP=Stop becomes a
+  # terminating NativeCommandError that would abort this best-effort cleanup.
+  $prevEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
     Stop-Service SmartTdsPg, SmartTdsApi -Force -ErrorAction SilentlyContinue
+    Get-Process SmartTdsApi -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     $stalePids = @(Get-NetTCPConnection -LocalPort $PgPort -State Listen -ErrorAction SilentlyContinue |
                    Select-Object -ExpandProperty OwningProcess -Unique)
     foreach ($stalePid in $stalePids) {
       Say "Killing stale process $stalePid holding port $PgPort" "Yellow"
       Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
     }
-    if ($stalePids.Count -gt 0) { Start-Sleep -Milliseconds 800 }
-  } catch { }
+    Get-Process postgres -ErrorAction SilentlyContinue |
+      Where-Object { -not $_.Path -or $_.Path -like "$AppDir*" -or $_.Path -like "$DataRoot*" } |
+      Stop-Process -Force -ErrorAction SilentlyContinue
+    # delete the now-stopped services so they get re-registered cleanly below
+    foreach ($svc in 'SmartTdsApi','SmartTdsPg') {
+      if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+        Say "Removing leftover service $svc" "Yellow"
+        & sc.exe delete $svc | Out-Null
+      }
+    }
+    $pgctlClear = Join-Path $pgBin "pg_ctl.exe"
+    if (Test-Path $pgctlClear) { & $pgctlClear unregister -N SmartTdsPg 2>$null | Out-Null }
+    # sc.exe delete is ASYNC — a lingering handle leaves the service "marked for deletion",
+    # which Get-Service still reports, so install-service.ps1 would think it exists and skip
+    # the fresh re-register. Wait (bounded) until both are actually gone.
+    foreach ($svc in 'SmartTdsApi','SmartTdsPg') {
+      for ($i = 0; $i -lt 20 -and (Get-Service -Name $svc -ErrorAction SilentlyContinue); $i++) {
+        Start-Sleep -Milliseconds 250
+      }
+      if (Get-Service -Name $svc -ErrorAction SilentlyContinue) {
+        Say "Service $svc still marked-for-deletion after wait (a Services.msc window can hold it open)." "Yellow"
+      }
+    }
+  } catch { Say ("service/port cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
+  finally { $ErrorActionPreference = $prevEap }
 
   # Delete any leftover machineid.dat — the machine-id is OS-derived now (MachineGuid /
   # /etc/machine-id), so the file is just a cache. Removing it on install guarantees a
