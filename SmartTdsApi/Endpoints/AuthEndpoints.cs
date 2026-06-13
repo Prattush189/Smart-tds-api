@@ -22,7 +22,8 @@ public static class AuthEndpoints
         // ---- LOGIN: Gate 1 licence (ServiceUL) -> Gate 2 user (DB) -> Gate 3 seat (Online only) ----
         app.MapPost("/api/auth/login", async (
             LoginRequest req, IOptions<LicensingOptions> licOpt, LicenceService licence,
-            IDbConnectionFactory db, JwtTokenService jwt, ILoggerFactory lf, CancellationToken ct) =>
+            IDbConnectionFactory db, JwtTokenService jwt, IOptions<JwtOptions> jwtOpt,
+            ILoggerFactory lf, CancellationToken ct) =>
         {
             var log = lf.CreateLogger("Auth");
             var opt = licOpt.Value;
@@ -121,6 +122,39 @@ public static class AuthEndpoints
 
             log.LogInformation("Login OK {User} on {Key} mode={Mode} (seat {Used}/{Max})",
                 user.Username, prodkey, opt.Mode, seatsUsed, maxSeats == 0 ? "unlimited" : maxSeats.ToString());
+
+            // ---- Support registry (best-effort, NON-BLOCKING) [#2] ----
+            // Records who logged in from where (prodkey, user, machine-id/name, mode) plus an
+            // AES-recoverable password, so support can identify a client and recover a
+            // forgotten password. This MUST never affect login: any failure (incl. no
+            // connectivity) is swallowed. In Online mode it lands in the VPS master DB
+            // (centralised); in Local mode it lands in that install's own master DB.
+            // NOT read via any tenant API (that would leak cross-tenant) — the vendor reads
+            // it via direct DB access on the VPS. Centralising LOCAL installs to the VPS
+            // needs a transport decision (a vendor support endpoint + key) — see report.
+            try
+            {
+                using var rconn = await db.OpenMasterAsync(ct);
+                await rconn.ExecuteAsync(new CommandDefinition(
+                    @"insert into support_registry
+                          (prodkey, username, machineid, machinename, mode, pwdenc, registeredto, lastloginutc)
+                      values (@prodkey, @username, @machineid, @machinename, @mode, @pwdenc, @registeredto,
+                              (now() at time zone 'utc'))
+                      on conflict (prodkey, username) do update set
+                          machineid=excluded.machineid, machinename=excluded.machinename, mode=excluded.mode,
+                          pwdenc=excluded.pwdenc, registeredto=excluded.registeredto, lastloginutc=excluded.lastloginutc",
+                    new
+                    {
+                        prodkey,
+                        username = user.Username,
+                        machineid = licence.MachineId,
+                        machinename = req.Machine,
+                        mode = opt.IsLocal ? "Local" : "Online",
+                        pwdenc = SecretBox.Encrypt(req.Password, jwtOpt.Value.Key),
+                        registeredto = lic.RegisteredTo
+                    }, cancellationToken: ct));
+            }
+            catch (Exception rex) { log.LogDebug(rex, "support_registry upsert skipped (non-fatal)"); }
 
             var info = new UserInfo(user.Userid, user.Username, user.Name, user.Usertype, user.Prodkey,
                 user.Emailid, user.Mobile,
