@@ -53,8 +53,13 @@ $pgBin   = Join-Path $AppDir "pgsql\bin"
 $apiDir  = Join-Path $AppDir "api"
 $dataDir = Join-Path $DataRoot "data"
 $logDir  = Join-Path $DataRoot "logs"
-New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-Start-Transcript -Path (Join-Path $logDir "install-local.log") -Append | Out-Null
+# Best-effort logging — NEVER let an unwritable log dir abort the install/uninstall. (A
+# prior over-broad ACL on the data tree could make logs\ unwritable in a reduced context;
+# that must not fail the MSI custom action.) The finally's Stop-Transcript tolerates "not started".
+try {
+  New-Item -ItemType Directory -Force -Path $logDir -ErrorAction Stop | Out-Null
+  Start-Transcript -Path (Join-Path $logDir "install-local.log") -Append -ErrorAction Stop | Out-Null
+} catch { Write-Host ("(install log unavailable, continuing: " + $_.Exception.Message + ")") -ForegroundColor Yellow }
 
 try {
   if ($Uninstall) {
@@ -266,18 +271,29 @@ schtasks /Delete /TN SmartTdsCleanup /F
     }
   } catch { Say ("final password sync warning (ignored): " + $_.Exception.Message) "Yellow" }
 
-  # ---- LOCK DOWN the data tree (security) ----
-  # By default everything under C:\ProgramData is readable by all interactive users, so a
-  # standard (non-admin) user could read api\appsettings.Local.json — which holds the DB
-  # password AND the JWT signing key (= forge any token) — and could tamper with the API
-  # exe that runs as LocalSystem (SYSTEM code execution). Restrict the whole tree to
-  # SYSTEM + Administrators only. This also protects the install transcript + backups
-  # (full DB dumps with all PII) at rest. The API service (LocalSystem) and admins keep
-  # full access; nothing else needs it (the desktop talks to the API over HTTP).
+  # ---- LOCK DOWN the secrets (security) ----
+  # Remove the default "Users" read from the SPECIFIC sensitive paths, keeping SYSTEM (the
+  # API service) + Administrators. Do NOT lock the whole data tree: an earlier version did
+  # that incl. logs\, which broke the uninstall custom action's transcript write — so we
+  # also self-heal here by resetting $DataRoot back to inherited perms first.
+  #   • api\appsettings.Local.json — live DB password + JWT signing key (the crown jewels;
+  #                                  it lives under the install dir, NOT ProgramData)
+  #   • <DataRoot>\backups\         — full DB dumps (all client PII)
+  $prevAclEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
   try {
-    & icacls.exe "$DataRoot" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q | Out-Null
-    Say "Locked down $DataRoot to SYSTEM + Administrators."
+    # heal any prior over-broad lock so logs\ (the uninstall transcript) is writable again
+    & icacls.exe "$DataRoot" /reset /T /C /Q | Out-Null
+    $cfgSecret = Join-Path $apiDir "appsettings.Local.json"
+    if (Test-Path $cfgSecret) {
+      & icacls.exe "$cfgSecret" /inheritance:r /grant:r "SYSTEM:F" "*S-1-5-32-544:F" /C /Q | Out-Null
+    }
+    $backupsSecret = Join-Path $DataRoot "backups"
+    if (Test-Path $backupsSecret) {
+      & icacls.exe "$backupsSecret" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q | Out-Null
+    }
+    Say "Locked down secrets (appsettings.Local.json + backups\) to SYSTEM + Administrators."
   } catch { Say ("ACL hardening warning (ignored): " + $_.Exception.Message) "Yellow" }
+  finally { $ErrorActionPreference = $prevAclEap }
 
   # ---- Best-effort: report this install's DB creds to the central vendor registry ----
   # Lets support recover a client's PostgreSQL credentials remotely. OFF unless -SupportUrl
