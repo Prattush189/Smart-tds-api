@@ -32,18 +32,18 @@ public sealed record TdsPayeeDto
     public string? Name { get; init; }
     public string? DatePayment { get; init; }
     public string? DateDeduct { get; init; }
-    public int AmtPay { get; init; }
-    public int TdsDeduct { get; init; }
-    public int SurDeduct { get; init; }
-    public int Cess { get; init; }
-    public int TotalTds2 { get; init; }
+    public double AmtPay { get; init; }
+    public double TdsDeduct { get; init; }
+    public double SurDeduct { get; init; }
+    public double Cess { get; init; }
+    public double TotalTds2 { get; init; }
     public string? Pan { get; init; }
     public string? Section { get; init; }
     public string? PanStatus { get; init; }
     public int Paycode { get; init; }
     public bool eValid { get; init; }
     public string? FormType { get; init; }
-    public int ActualTds { get; init; }
+    public double ActualTds { get; init; }
     public double ChInterest { get; init; }
     public double ChTdsDep { get; init; }
 }
