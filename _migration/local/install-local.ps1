@@ -221,6 +221,19 @@ schtasks /Delete /TN SmartTdsCleanup /F
     }
   } catch { Say ("final password sync warning (ignored): " + $_.Exception.Message) "Yellow" }
 
+  # ---- LOCK DOWN the data tree (security) ----
+  # By default everything under C:\ProgramData is readable by all interactive users, so a
+  # standard (non-admin) user could read api\appsettings.Local.json — which holds the DB
+  # password AND the JWT signing key (= forge any token) — and could tamper with the API
+  # exe that runs as LocalSystem (SYSTEM code execution). Restrict the whole tree to
+  # SYSTEM + Administrators only. This also protects the install transcript + backups
+  # (full DB dumps with all PII) at rest. The API service (LocalSystem) and admins keep
+  # full access; nothing else needs it (the desktop talks to the API over HTTP).
+  try {
+    & icacls.exe "$DataRoot" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /T /C /Q | Out-Null
+    Say "Locked down $DataRoot to SYSTEM + Administrators."
+  } catch { Say ("ACL hardening warning (ignored): " + $_.Exception.Message) "Yellow" }
+
   Say "`nINSTALL COMPLETE." "Green"
   Say ("  API   : http://127.0.0.1:{0}/health  (LAN: http://<server-ip>:{0})" -f $ApiPort)
   Say ("  Login : {0} / (the admin password set during install)   (enter your Licence Key on the login screen - binds on first login)" -f $AdminUser)

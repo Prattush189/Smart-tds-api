@@ -15,6 +15,14 @@ echo ">> swap (preserving smarttds.env)"
 find "$RUN_DIR" -mindepth 1 -maxdepth 1 ! -name smarttds.env -exec rm -rf {} +
 cp -r /tmp/sttds-pub/* "$RUN_DIR/"
 chmod +x "$RUN_DIR/SmartTdsApi"
-echo ">> start";     systemctl start "$SERVICE"; sleep 1
-echo -n "health: ";  curl -s http://127.0.0.1:5080/health; echo
+echo ">> start";     systemctl start "$SERVICE"; sleep 2
+echo -n "health: "
+health="$(curl -s --max-time 10 http://127.0.0.1:5080/health || true)"
+echo "$health"
+# Don't report success on a dead deploy — assert the API actually came up healthy.
+if ! echo "$health" | grep -q '"status":"ok"'; then
+  echo ">> DEPLOY FAILED: API did not report healthy. Recent logs:" >&2
+  journalctl -u "$SERVICE" -n 30 --no-pager >&2 || true
+  exit 1
+fi
 echo ">> DONE"

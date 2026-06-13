@@ -43,7 +43,17 @@ for d in "${dumps[@]}"; do
   PG psql -d postgres -v ON_ERROR_STOP=1 -c \
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$db' AND pid<>pg_backend_pid();" >/dev/null
   PG psql -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $db;" -c "CREATE DATABASE $db;"
-  PG pg_restore -d "$db" --no-owner --no-privileges "$d" || true   # pg_restore warnings are non-fatal
+  # pg_restore exits non-zero even on benign --no-owner notices, so a non-zero code is
+  # not proof of failure — but a real error must NOT be reported as "RESTORE COMPLETE".
+  if ! out="$(PG pg_restore -d "$db" --no-owner --no-privileges "$d" 2>&1)"; then
+    if echo "$out" | grep -qiE 'pg_restore: error:|^[[:space:]]*error:'; then
+      echo "$out" >&2
+      echo ">> RESTORE FAILED for '$db' — database may be incomplete. Aborting (a prerestore safety backup was taken)." >&2
+      systemctl start "$SERVICE" || true
+      exit 1
+    fi
+    echo "$out"   # warnings only — non-fatal
+  fi
   if [ -f "$GRANTS_SQL" ]; then
     PG psql -d "$db" -v dbname="$db" -v ON_ERROR_STOP=1 -f "$GRANTS_SQL" >/dev/null
   else

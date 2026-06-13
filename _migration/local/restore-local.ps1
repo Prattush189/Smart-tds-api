@@ -83,7 +83,17 @@ try {
     Psql-Postgres "DROP DATABASE IF EXISTS $db;"
     Psql-Postgres "CREATE DATABASE $db;"
     $r = Run-Native $pgRestore @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d",$db,"--no-owner","--no-privileges",$d.FullName)
-    if ($r.Code -ne 0) { Write-Host $r.Out -ForegroundColor Yellow }   # pg_restore warns are non-fatal
+    if ($r.Code -ne 0) {
+      # pg_restore exits non-zero even on benign notices (e.g. --no-owner role messages),
+      # so a non-zero code alone is NOT proof of failure. Treat it as a real failure only
+      # when it actually logged an error line — otherwise a half-restored DB was being
+      # reported as "RESTORE COMPLETE". The safety backup above protects against this throw.
+      if ($r.Out -match '(?im)pg_restore:\s*error:' -or $r.Out -match '(?im)^\s*error:') {
+        Write-Host $r.Out -ForegroundColor Red
+        throw "pg_restore FAILED for '$db' — database may be incomplete. Restore aborted; use the prerestore safety backup if needed."
+      }
+      Write-Host $r.Out -ForegroundColor Yellow   # warnings only — non-fatal
+    }
     if (Test-Path $GrantsSql) {
       $g = Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d",$db,"-v","dbname=$db","-v","ON_ERROR_STOP=1","-f",$GrantsSql)
       if ($g.Code -ne 0) { Write-Host $g.Out -ForegroundColor Red; throw "re-grant failed on $db" }

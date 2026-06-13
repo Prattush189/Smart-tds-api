@@ -35,7 +35,7 @@ Re-running `convert_prats.py` reprints the kept/dropped breakdown.
 - Parses by the `GO` batch separator, so values with embedded newlines
   (consultant `logo`/`emailsignature`) are not split.
 - Resets identity sequences at the end of each file.
-- **`prats` user password** `Prats@123` is re-hashed to PBKDF2-HMAC-SHA256
+- **`prats` user password** `&lt;prats-password&gt;` is re-hashed to PBKDF2-HMAC-SHA256
   (100k iterations) matching `SmartTdsApi/Auth/PasswordHasher.cs`, so it logs in.
 
 ## Reference/master tables are intentionally OMITTED
@@ -64,11 +64,11 @@ database (`seed_data_prats_master.sql` → `masterdbtds`, `_25` → `smarttds25`
 > failure rolls the whole file back — nothing partial.
 
 ## Login after loading
-- `prats` / `Prats@123`, licence (prodKey) **PYFA5V_1** — already the licence on
+- `prats` / `&lt;prats-password&gt;`, licence (prodKey) **PYFA5V_1** — already the licence on
   the VPS. Note: ONLINE mode requires the prodKey to be recognised by the
   ServiceUL licence authority (the test key may fail gate 1); the existing
-  `admin/Admin@123` user remains available either way.
-- Assessee portal passwords inside the data (e.g. `Satish@01`) are stored as-is
+  `admin/&lt;admin-password&gt;` user remains available either way.
+- Assessee portal passwords inside the data (e.g. `&lt;portal-password&gt;`) are stored as-is
   (plain data, not API logins) — unchanged.
 
 ## Re-generating
@@ -81,4 +81,4 @@ Reads `C:\Users\Prattush\Downloads\script.txt`, writes the three `.sql` files.
 Loaded into a throwaway PostgreSQL 16 (Docker `sttest`) built with the exact
 migration schema — all three files applied with `ON_ERROR_STOP=1` and **zero
 errors**; row counts, boolean conversion, `profilepic` NULLs, and the
-`prats` PBKDF2 hash (verified against `Prats@123`) all confirmed.
+`prats` PBKDF2 hash (verified against `&lt;prats-password&gt;`) all confirmed.
