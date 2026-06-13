@@ -210,8 +210,17 @@ schtasks /Delete /TN SmartTdsCleanup /F
       $cnt = & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d masterdbtds -tAc "select count(*) from assessee" 2>$null
       if (("$cnt".Trim()) -eq "0") {
         Say ("== restoring most recent backup: " + $latest.Name + " ==")
-        & (Join-Path $here "restore-local.ps1") -BackupZip $latest.FullName -InstallRoot $DataRoot `
-            -PgBin $pgBin -Port $PgPort -Force -NoSafetyBackup
+        # NON-FATAL: auto-restore is a convenience. If it fails for ANY reason (a bad/old
+        # backup, a version-mismatched restore-local, a pg_restore error, …) the install
+        # MUST still finish — the DBs are already provisioned and usable; the user can
+        # restore later from the app's Backup/Restore screen. An UNCAUGHT throw here was
+        # failing the whole MSI ("a program run as part of the setup did not finish").
+        try {
+          & (Join-Path $here "restore-local.ps1") -BackupZip $latest.FullName -InstallRoot $DataRoot `
+              -PgBin $pgBin -Port $PgPort -Force -NoSafetyBackup
+        } catch {
+          Say ("  (auto-restore failed - install continues; restore manually later: " + $_.Exception.Message + ")") "Yellow"
+        }
       } else {
         Say "  (database already has data - skipping auto-restore)" "Yellow"
       }
