@@ -81,10 +81,15 @@ public sealed class LicenceService
         var result = await CallServiceAsync(key, nowUtc, ct);
         if (result.Allowed)
         {
-            _cache[key] = result;
-            // Persist PAID results only — Pump always re-validated Demo against the service,
-            // so a demo licence gets no offline grace.
-            if (!IsDemo(result.Status)) await PersistAsync(key, result, ct);
+            // PAID results get the in-memory cache AND the persisted blob. A DEMO gets
+            // NEITHER — Pump re-validated demo on every run, so it must hit ServiceUL on
+            // each login (no 24h in-memory free pass, no offline grace). Caching it in
+            // memory would have let a demo run offline for RecheckHours. [F6]
+            if (!IsDemo(result.Status))
+            {
+                _cache[key] = result;
+                await PersistAsync(key, result, ct);
+            }
             return result;
         }
 
@@ -119,22 +124,76 @@ public sealed class LicenceService
     private readonly object _timeLock = new();
     private long _trustedAtTicks = -1;
     private TimeSpan _trustedOffset = TimeSpan.Zero;
+    // Rollback FLOOR: the highest AUTHORITATIVE (network) time ever seen, persisted in
+    // applicationparams. When no network time is reachable the offset falls back to the
+    // box clock, which a LAN customer could roll BACKWARD to keep an expired/grace
+    // licence alive — the trusted time is clamped to never drop below this floor, so a
+    // backward clock change can't shrink nowUtc. (Forward rollback is caught separately
+    // by the blob's CheckedUtc > now+2h guard.) [F4]
+    private DateTime _maxTrustedUtc = DateTime.MinValue;
+    private bool _floorLoaded;
 
     private async Task<DateTime> TrustedUtcNowAsync(CancellationToken ct)
     {
         lock (_timeLock)
         {
             if (_trustedAtTicks >= 0 && Environment.TickCount64 - _trustedAtTicks < 3_600_000)
-                return DateTime.UtcNow + _trustedOffset;
+                return ApplyFloor(DateTime.UtcNow + _trustedOffset);
+        }
+
+        // Load the persisted floor once (outside the lock — it's a DB read).
+        if (!_floorLoaded)
+        {
+            var persisted = await LoadTrustedFloorAsync(ct);
+            lock (_timeLock)
+            {
+                if (persisted > _maxTrustedUtc) _maxTrustedUtc = persisted;
+                _floorLoaded = true;
+            }
         }
 
         var fetched = await FetchNetworkUtcAsync(ct);
+        DateTime result;
+        bool advanced = false;
         lock (_timeLock)
         {
             _trustedOffset = fetched.HasValue ? fetched.Value - DateTime.UtcNow : TimeSpan.Zero;
             _trustedAtTicks = Environment.TickCount64;
-            return DateTime.UtcNow + _trustedOffset;
+            // Only an AUTHORITATIVE network time may raise the floor.
+            if (fetched.HasValue && fetched.Value > _maxTrustedUtc)
+            {
+                _maxTrustedUtc = fetched.Value;
+                advanced = true;
+            }
+            result = ApplyFloor(DateTime.UtcNow + _trustedOffset);
         }
+        if (advanced) await SaveTrustedFloorAsync(_maxTrustedUtc, ct);
+        return result;
+    }
+
+    // caller holds _timeLock
+    private DateTime ApplyFloor(DateTime v) => v < _maxTrustedUtc ? _maxTrustedUtc : v;
+
+    private async Task<DateTime> LoadTrustedFloorAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var conn = await _db.OpenMasterAsync(ct);
+            var v = await conn.QueryFirstOrDefaultAsync<string>(new CommandDefinition(
+                "select value from applicationparams where name='lastTrustedUtc' limit 1",
+                cancellationToken: ct));
+            if (!string.IsNullOrWhiteSpace(v) && long.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ticks)
+                && ticks > 0 && ticks <= DateTime.MaxValue.Ticks)
+                return new DateTime(ticks, DateTimeKind.Utc);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "Could not load trusted-time floor"); }
+        return DateTime.MinValue;
+    }
+
+    private async Task SaveTrustedFloorAsync(DateTime utc, CancellationToken ct)
+    {
+        try { await UpsertParamAsync("lastTrustedUtc", utc.Ticks.ToString(CultureInfo.InvariantCulture), ct); }
+        catch (Exception ex) { _log.LogDebug(ex, "Could not persist trusted-time floor"); }
     }
 
     private async Task<DateTime?> FetchNetworkUtcAsync(CancellationToken ct)
