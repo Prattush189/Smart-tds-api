@@ -124,14 +124,14 @@ public static class BackupEndpoints
             }, statusCode: 202);
         }).WithName("RestoreBackup");
 
-        // POST /api/migrate — apply pending schema migrations (Local only). Any
-        // authenticated user may trigger it; it's idempotent and runs as the
-        // postgres superuser via migrate-local.ps1. The desktop calls this after
-        // SmartUpdater has fetched new migration files, so locals self-update
-        // without a reinstall.
-        app.MapPost("/api/migrate", async (IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt, CancellationToken ct) =>
+        // POST /api/migrate — apply pending schema migrations (Local only). ADMIN only:
+        // it runs migrate-local.ps1 as the postgres superuser, so it must not be triggerable
+        // by a normal user. Idempotent. The desktop calls this after SmartUpdater has fetched
+        // new migration files, so locals self-update without a reinstall.
+        app.MapPost("/api/migrate", async (ClaimsPrincipal user, IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt, CancellationToken ct) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
+            if (!IsAdmin(user)) return Results.Forbid();
             var (code, stdout, stderr) = await RunScript(opt.Value, "migrate-local.ps1", Array.Empty<string>(), ct);
             if (code != 0) return Results.Problem("Migrate failed: " + Tail(stderr + stdout), statusCode: 500);
             return Results.Ok(new { ok = true, output = Tail(stdout, 1000) });

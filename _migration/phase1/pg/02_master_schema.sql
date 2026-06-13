@@ -603,7 +603,8 @@ CREATE TABLE users (
     prodkey                 varchar(10) NOT NULL,
     username                varchar(50) NOT NULL,
     name                    varchar(50) NOT NULL,
-    pwd                     varchar(500) NOT NULL,
+    pwd                     varchar(500) NOT NULL,   -- PBKDF2 hash (login verifies this)
+    pwdenc                  text,                    -- AES recoverable copy (admin "view password")
     emailid                 varchar(150) NOT NULL,
     mobile                  varchar(10) NOT NULL,
     usertype                varchar(40) NOT NULL,

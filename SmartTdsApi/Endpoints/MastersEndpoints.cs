@@ -438,10 +438,15 @@ public static class MastersEndpoints
         }).WithName("ListTdsAoMasters");
 
         // GET /api/masters/applicationparams
+        // NOTE: applicationparams is a single shared (non-RLS) table. The licence
+        // service stores per-key AES blobs here as rows named 'auth' / 'auth:<KEY>'.
+        // Those must NEVER be returned to clients (in Online mode that would leak every
+        // firm's encrypted licence blob cross-tenant), so they are filtered out here.
         grp.MapGet("/applicationparams", async (IDbConnectionFactory db, CancellationToken ct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "select id, name, value from applicationparams";
+            const string sql =
+                "select id, name, value from applicationparams where name <> 'auth' and name not like 'auth:%'";
             var rows = await conn.QueryAsync<ApplicationParamsDto>(
                 new CommandDefinition(sql, cancellationToken: ct));
             return Results.Ok(rows);

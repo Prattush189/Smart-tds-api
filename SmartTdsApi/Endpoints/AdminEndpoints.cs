@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using Dapper;
+using Microsoft.Extensions.Options;
+using SmartTdsApi.Auth;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -87,6 +89,9 @@ public sealed record FeePaidMarkingReq
     public DateTime modifiedOn { get; init; }
 }
 
+/// <summary>Just the password columns, for unchanged-password detection on update.</summary>
+internal sealed record UserPwdRow(string Pwd, string? Pwdenc);
+
 public static class AdminEndpoints
 {
     public static void MapAdminEndpoints(this IEndpointRouteBuilder app)
@@ -104,18 +109,21 @@ public static class AdminEndpoints
     // identity. Passwords are stored exactly as sent (hashing handled elsewhere).
     private static void MapUsers(RouteGroupBuilder grp)
     {
+        // pwd  = one-way PBKDF2 hash that login verifies.
+        // pwdenc = AES-encrypted recoverable copy for the admin "view password" feature.
+        // Both are set per-handler (not in UserParams) via HashAndEncrypt / detection.
         const string UserColumns =
-            @"username, name, pwd, emailid, mobile, usertype, assesseeaddflag, assesseeeditflag,
+            @"username, name, pwd, pwdenc, emailid, mobile, usertype, assesseeaddflag, assesseeeditflag,
               assesseedeleteflag, viewpwdflag, backupflag, restoreflag, efilingflag, rptviewflag,
               editfiledreturnflag, selectedper, createdby, createdon, modifiedby, modifiedon, isdeleted";
 
         const string UserValues =
-            @"@userName, @name, @pwd, @emailId, @mobile, @userType, @assesseeAddFlag, @assesseeEditFlag,
+            @"@userName, @name, @pwd, @pwdenc, @emailId, @mobile, @userType, @assesseeAddFlag, @assesseeEditFlag,
               @assesseeDeleteFlag, @viewPwdFlag, @backupFlag, @restoreFlag, @efilingFlag, @rptViewFlag,
               @editFiledReturnFlag, @selectedPer, @CreatedBy, @CreatedOn, @ModifiedBy, @ModifiedOn, @IsDeleted";
 
         const string UserSet =
-            @"name=@name, pwd=@pwd, emailid=@emailId, mobile=@mobile, usertype=@userType,
+            @"name=@name, pwd=@pwd, pwdenc=@pwdenc, emailid=@emailId, mobile=@mobile, usertype=@userType,
               assesseeaddflag=@assesseeAddFlag, assesseeeditflag=@assesseeEditFlag,
               assesseedeleteflag=@assesseeDeleteFlag, viewpwdflag=@viewPwdFlag, backupflag=@backupFlag,
               restoreflag=@restoreFlag, efilingflag=@efilingFlag, rptviewflag=@rptViewFlag,
@@ -147,12 +155,32 @@ public static class AdminEndpoints
             return row is null ? Results.NotFound() : Results.Ok(row);
         }).WithName("GetUser");
 
-        // POST /api/users — insert; prodkey from JWT; PK is (prodkey, username).
-        // Returns { id } = the new userid.
-        grp.MapPost("/users", async (UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
+        // GET /api/users/{username}/password — recover the plaintext password (admin "view
+        // password" / forgotten-password support). ADMIN only; decrypts the AES recoverable
+        // copy on demand. Returns null when the row predates this feature (hash-only).
+        grp.MapGet("/users/{username}/password", async (string username, ClaimsPrincipal principal,
+                                IDbConnectionFactory db, IOptions<JwtOptions> jwt, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
             if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (!IsAdmin(principal)) return Results.Forbid();
+
+            using var conn = await db.OpenMasterAsync(ct);
+            var enc = await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
+                "select pwdenc from users where prodkey=@prodkey and username=@username",
+                new { prodkey, username }, cancellationToken: ct));
+            return Results.Ok(new { username, password = SecretBox.Decrypt(enc, jwt.Value.Key) });
+        }).WithName("GetUserPassword");
+
+        // POST /api/users — insert; prodkey from JWT; PK is (prodkey, username).
+        // Returns { id } = the new userid. ADMIN only — creating a user (and picking its
+        // usertype) is a privilege operation; a normal user must never mint an account.
+        grp.MapPost("/users", async (UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
+                                     IOptions<JwtOptions> jwt, CancellationToken ct) =>
+        {
+            var prodkey = principal.FindFirstValue("prodkey");
+            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (!IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"insert into users (prodkey, {UserColumns})
@@ -160,31 +188,80 @@ public static class AdminEndpoints
                          returning userid";
             var p = UserParams(body);
             p.Add("prodkey", prodkey);
+            p.Add("pwd", PasswordHasher.Hash(body.pwd ?? ""));            // login verifies this
+            p.Add("pwdenc", SecretBox.Encrypt(body.pwd, jwt.Value.Key));  // recoverable copy (admin view)
             var newId = await conn.ExecuteScalarAsync<int>(new CommandDefinition(sql, p, cancellationToken: ct));
             return Results.Ok(new { id = newId });
         }).WithName("CreateUser");
 
         // PUT /api/users/{username} — update by PK (prodkey from JWT).
-        grp.MapPut("/users/{username}", async (string username, UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
+        //  • ADMIN: full update (any user, including usertype + privilege flags).
+        //  • non-admin: may update ONLY THEIR OWN row, and ONLY profile fields
+        //    (name/email/mobile/pwd) + the selectedPer pointer. usertype and every
+        //    privilege flag are left untouched server-side, so a normal user cannot
+        //    elevate themselves (e.g. via the selectedPer save the desktop does on
+        //    every assessee switch). This is the privilege-escalation fix.
+        grp.MapPut("/users/{username}", async (string username, UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
+                                               IOptions<JwtOptions> jwt, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
             if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
 
+            var isAdmin = IsAdmin(principal);
+            if (!isAdmin)
+            {
+                var caller = principal.FindFirstValue(ClaimTypes.NameIdentifier)
+                             ?? principal.FindFirstValue("sub");
+                if (!string.Equals(caller, username, StringComparison.OrdinalIgnoreCase))
+                    return Results.Forbid();
+            }
+
             using var conn = await db.OpenMasterAsync(ct);
-            var sql = $@"update users set {UserSet}
-                         where prodkey = @prodkey and username = @key_username";
+
+            // Password handling: the desktop round-trips the stored hash when it isn't
+            // retyped. Treat "blank" or "exactly the stored hash" as UNCHANGED (keep both
+            // columns); anything else is a NEW plaintext → re-hash + re-encrypt.
+            var stored = await conn.QueryFirstOrDefaultAsync<UserPwdRow>(new CommandDefinition(
+                "select pwd, pwdenc from users where prodkey=@prodkey and username=@username",
+                new { prodkey, username }, cancellationToken: ct));
             var p = UserParams(body);
             p.Add("prodkey", prodkey);
             p.Add("key_username", username);
-            await conn.ExecuteAsync(new CommandDefinition(sql, p, cancellationToken: ct));
+            var unchanged = stored is not null && (string.IsNullOrEmpty(body.pwd) || body.pwd == stored.Pwd);
+            if (unchanged)
+            {
+                p.Add("pwd", stored!.Pwd);
+                p.Add("pwdenc", stored.Pwdenc);
+            }
+            else
+            {
+                p.Add("pwd", PasswordHasher.Hash(body.pwd ?? ""));
+                p.Add("pwdenc", SecretBox.Encrypt(body.pwd, jwt.Value.Key));
+            }
+
+            if (isAdmin)
+            {
+                var sql = $@"update users set {UserSet}
+                             where prodkey = @prodkey and username = @key_username";
+                await conn.ExecuteAsync(new CommandDefinition(sql, p, cancellationToken: ct));
+                return Results.NoContent();
+            }
+
+            // Non-admin self: profile + password only; usertype/flags left untouched.
+            const string selfSql =
+                @"update users set name=@name, emailid=@emailId, mobile=@mobile, pwd=@pwd, pwdenc=@pwdenc,
+                         selectedper=@selectedPer, modifiedby=@ModifiedBy, modifiedon=@ModifiedOn
+                  where prodkey=@prodkey and username=@key_username";
+            await conn.ExecuteAsync(new CommandDefinition(selfSql, p, cancellationToken: ct));
             return Results.NoContent();
         }).WithName("UpdateUser");
 
-        // DELETE /api/users/{username} — soft delete (prodkey from JWT).
+        // DELETE /api/users/{username} — soft delete (prodkey from JWT). ADMIN only.
         grp.MapDelete("/users/{username}", async (string username, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
             var prodkey = principal.FindFirstValue("prodkey");
             if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (!IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "delete from users where prodkey = @prodkey and username = @username";
@@ -192,6 +269,10 @@ public static class AdminEndpoints
             return Results.NoContent();
         }).WithName("DeleteUser");
     }
+
+    // ADMIN gate: usertype claim issued at login (mirrors BackupEndpoints.IsAdmin).
+    private static bool IsAdmin(ClaimsPrincipal user) =>
+        string.Equals(user.FindFirstValue("usertype"), "ADMIN", StringComparison.OrdinalIgnoreCase);
 
     // ──────────────────────────── BANKDETAILS ────────────────────────────
     // Assessee-owned (no prodkey column): scoped by subcode like the legacy.
@@ -406,7 +487,9 @@ public static class AdminEndpoints
         var p = new DynamicParameters();
         p.Add("userName", b.userName);
         p.Add("name", b.name);
-        p.Add("pwd", b.pwd);
+        // pwd / pwdenc are NOT added here — they are derived per-handler from the
+        // plaintext (hash for login + AES recoverable copy), with unchanged-password
+        // detection on update so the desktop round-tripping the stored hash is a no-op.
         p.Add("emailId", b.emailId);
         p.Add("mobile", b.mobile);
         p.Add("userType", b.userType);
