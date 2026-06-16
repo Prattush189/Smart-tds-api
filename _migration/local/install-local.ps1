@@ -189,6 +189,20 @@ schtasks /Delete /TN SmartTdsCleanup /F
       -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `
       -ApiDir $apiDir -AdminUser $AdminUser -AdminPwd $AdminPwd
 
+  # 1a) SAFETY BACKUP on re-install: if masterdbtds already holds real data, snapshot ALL
+  # DBs BEFORE applying migrations — so a bad upgrade (or anything later) can never lose the
+  # client's data. A silent MSI custom action can't prompt the user, so existing data is
+  # protected automatically. Non-fatal: a fresh install (no assessees yet) just skips it.
+  try {
+    $env:PGPASSWORD = "postgres"
+    $existing = & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d masterdbtds -tAc "select count(*) from assessee" 2>$null
+    if (((("$existing").Trim()) -as [int]) -gt 0) {
+      Say "== existing data found - taking a safety backup before upgrade =="
+      & (Join-Path $here "backup-local.ps1") -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `
+          -SuperUser postgres -SuperPwd postgres -Label preupgrade -Keep 30 | Out-Null
+    }
+  } catch { Say ("pre-upgrade safety backup skipped (non-fatal): " + $_.Exception.Message) "Yellow" }
+
   # 1b) apply any pending schema migrations to existing/just-created DBs (PG still running)
   Say "== applying schema migrations =="
   & (Join-Path $here "migrate-local.ps1") -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort
