@@ -224,7 +224,10 @@ app.MapGet("/health", async (SmartTdsApi.Data.IDbConnectionFactory db, Cancellat
         app.Logger.LogWarning(ex, "Health check: master DB unreachable");
     }
     // `name` lets the desktop's Server list show a friendly machine name instead of a bare IP.
-    return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow });
+    // `version` lets a LAN client read the server's API version (it has no local \api to
+    // inspect) so it can prompt the user to run the updater on the server machine.
+    var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString();
+    return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow, version });
 }).AllowAnonymous();
 
 app.MapAuthEndpoints();

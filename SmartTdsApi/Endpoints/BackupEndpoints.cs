@@ -25,9 +25,13 @@ public sealed class BackupOptions
 
     public string ResolvedScriptsDir =>
         ScriptsDir ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "_migration", "local"));
+    // Backups live with the install's data, NOT under ProgramData/CommonApplicationData.
+    // The data dir is co-located at <AppDir>\Data (the API exe is at <AppDir>\api, so
+    // …\api → …\Data\backups). Resolve it relative to the API exe, matching ResolvedPgBin.
+    // (Old installs/backups under C:\ProgramData\SmartTds\backups: set Backup:BackupRoot
+    // in config to point there, or move the zips into <AppDir>\Data\backups.)
     public string ResolvedBackupRoot =>
-        BackupRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds", "backups");
+        BackupRoot ?? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Data", "backups"));
     // pgsql ships alongside the API under the install dir (…\api → …\pgsql\bin),
     // NOT under ProgramData — resolve it relative to the API exe.
     public string ResolvedPgBin =>

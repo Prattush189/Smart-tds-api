@@ -18,8 +18,8 @@
 #>
 [CmdletBinding()]
 param(
-  [string] $InstallRoot = (Join-Path $env:ProgramData "SmartTds"),
-  [string] $PgBin,                                  # default <InstallRoot>\pgsql\bin
+  [string] $InstallRoot = "",                        # data root (holds \backups). Default: auto-derived <AppDir>\Data
+  [string] $PgBin,                                  # default <AppDir>\pgsql\bin (auto), else <InstallRoot>\pgsql\bin
   [int]    $Port      = 5433,
   [string] $SuperUser = "postgres",
   [string] $SuperPwd  = "Pass@123",                 # local-only superuser (FIXED across installs)
@@ -30,7 +30,46 @@ param(
   [string] $Licence   = ""                           # optional tag in the file name
 )
 $ErrorActionPreference = "Stop"
-if (-not $PgBin)      { $PgBin      = Join-Path $InstallRoot "pgsql\bin" }
+
+# Find the install <AppDir> (the folder holding api\SmartTdsApi.exe) the same way
+# diagnose-local.ps1 does, so STANDALONE runs (and restore's safety backup) land in the
+# CURRENT location <AppDir>\Data\backups + use pgsql at <AppDir>\pgsql\bin — instead of the
+# legacy C:\ProgramData\SmartTds default. NOTE: pgsql and \Data have DIFFERENT parents, so
+# we must derive each separately.
+function Resolve-SmartTdsAppDir {
+  foreach ($r in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+    if (-not (Test-Path $r)) { continue }
+    foreach ($k in (Get-ChildItem $r -ErrorAction SilentlyContinue)) {
+      $p = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+      if (-not $p -or -not $p.DisplayName -or -not $p.InstallLocation) { continue }
+      if ($p.DisplayName -notlike '*SmartTDS*' -and $p.DisplayName -notlike '*Smart Tds*') { continue }
+      $appDir = $p.InstallLocation.TrimEnd('\')
+      if (Test-Path (Join-Path $appDir 'api\SmartTdsApi.exe')) { return $appDir }
+    }
+  }
+  foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+    foreach ($name in @('SmartTDS','SmartTds')) {
+      $appDir = Join-Path $d.Root $name
+      if (Test-Path (Join-Path $appDir 'api\SmartTdsApi.exe')) { return $appDir }
+    }
+  }
+  return $null
+}
+if (-not $InstallRoot -or -not $PgBin) {
+  $appDir = Resolve-SmartTdsAppDir
+  if ($appDir) {
+    if (-not $PgBin) { $PgBin = Join-Path $appDir "pgsql\bin" }
+    if (-not $InstallRoot) {
+      $data = Join-Path $appDir "Data"
+      if     (Test-Path $data)                                  { $InstallRoot = $data }
+      elseif (Test-Path (Join-Path $env:ProgramData "SmartTds")) { $InstallRoot = Join-Path $env:ProgramData "SmartTds" }
+      else                                                       { $InstallRoot = $data }
+    }
+  }
+}
+if (-not $InstallRoot) { $InstallRoot = Join-Path $env:ProgramData "SmartTds" }   # last-resort (legacy)
+if (-not $PgBin)      { $PgBin      = Join-Path $InstallRoot "pgsql\bin" }        # last-resort (legacy layout)
 if (-not $BackupRoot) { $BackupRoot = Join-Path $InstallRoot "backups" }
 $pgDump = Join-Path $PgBin "pg_dump.exe"
 $psql   = Join-Path $PgBin "psql.exe"
