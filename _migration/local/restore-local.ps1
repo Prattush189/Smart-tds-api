@@ -1,5 +1,5 @@
 <#
-  restore-local.ps1 — restore a SmartTds backup zip (made by backup-local.ps1)
+  restore-local.ps1 - restore a SmartTds backup zip (made by backup-local.ps1)
   into the STANDALONE LOCAL PostgreSQL.
 
   Steps (per database in the zip):
@@ -22,7 +22,7 @@ param(
   [string] $PgBin,                                  # default <InstallRoot>\pgsql\bin
   [int]    $Port      = 5433,
   [string] $SuperUser = "postgres",
-  [string] $SuperPwd  = "postgres",
+  [string] $SuperPwd  = "Pass@123",
   [string] $ServiceName = "SmartTdsApi",
   [string] $GrantsSql,                              # default ..\phase5\01_least_privilege_role.sql
   [switch] $NoSafetyBackup,
@@ -86,13 +86,13 @@ try {
     if ($r.Code -ne 0) {
       # pg_restore exits non-zero even on benign notices (e.g. --no-owner role messages),
       # so a non-zero code alone is NOT proof of failure. Treat it as a real failure only
-      # when it actually logged an error line — otherwise a half-restored DB was being
+      # when it actually logged an error line - otherwise a half-restored DB was being
       # reported as "RESTORE COMPLETE". The safety backup above protects against this throw.
       if ($r.Out -match '(?im)pg_restore:\s*error:' -or $r.Out -match '(?im)^\s*error:') {
         Write-Host $r.Out -ForegroundColor Red
-        throw "pg_restore FAILED for '$db' — database may be incomplete. Restore aborted; use the prerestore safety backup if needed."
+        throw "pg_restore FAILED for '$db' - database may be incomplete. Restore aborted; use the prerestore safety backup if needed."
       }
-      Write-Host $r.Out -ForegroundColor Yellow   # warnings only — non-fatal
+      Write-Host $r.Out -ForegroundColor Yellow   # warnings only - non-fatal
     }
     if (Test-Path $GrantsSql) {
       $g = Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d",$db,"-v","dbname=$db","-v","ON_ERROR_STOP=1","-f",$GrantsSql)

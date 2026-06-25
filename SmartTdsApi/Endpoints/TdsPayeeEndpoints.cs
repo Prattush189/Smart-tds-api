@@ -112,8 +112,13 @@ public static class TdsPayeeEndpoints
                 // zero rows, so the challan-edit grid showed none of its linked entries.
                 if (!string.IsNullOrWhiteSpace(formType) && formType.Trim().ToUpperInvariant() != "ALL")
                 {
-                    sql.Append(" and t.formtype = @formType");
-                    param.Add("formType", formType);
+                    // Tolerant match: trim + case-insensitive, AND never hide rows whose
+                    // formtype is null/blank (legacy entries from an older build that didn't
+                    // stamp it) — an exact "= @formType" made such rows vanish from the grid
+                    // on a tester PC even though the entries existed.
+                    sql.Append(" and (t.formtype is null or btrim(t.formtype) = '' " +
+                               "or upper(btrim(t.formtype)) = upper(btrim(@formType)))");
+                    param.Add("formType", formType.Trim());
                 }
 
                 sql.Append(" order by t.id");

@@ -22,7 +22,7 @@ param(
   [string] $PgBin,                                  # default <InstallRoot>\pgsql\bin
   [int]    $Port      = 5433,
   [string] $SuperUser = "postgres",
-  [string] $SuperPwd  = "postgres",                 # local-only superuser
+  [string] $SuperPwd  = "Pass@123",                 # local-only superuser (FIXED across installs)
   [string] $BackupRoot,                             # default <InstallRoot>\backups
   [ValidateSet("manual","daily","auto","prerestore")]
   [string] $Label     = "manual",

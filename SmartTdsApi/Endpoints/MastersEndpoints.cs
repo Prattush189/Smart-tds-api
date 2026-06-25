@@ -451,5 +451,32 @@ public static class MastersEndpoints
                 new CommandDefinition(sql, cancellationToken: ct));
             return Results.Ok(rows);
         }).WithName("ListApplicationParams");
+
+        // PUT /api/masters/applicationparams  — upsert a single config row {name, value}.
+        // This was MISSING: the desktop (ApplicationParamsBal.UpdateApplicationParams,
+        // used by Lock Tax Year) PUTs here, but only a GET existed, so the call 404'd and
+        // surfaced as a generic ApiException ("SmartTds could not continue"). Same shared
+        // master-DB scope as the GET. The 'auth'/'auth:*' licence blobs are protected:
+        // clients may not create or overwrite them through this endpoint.
+        grp.MapPut("/applicationparams", async (ApplicationParamsDto dto, IDbConnectionFactory db, CancellationToken ct) =>
+        {
+            if (dto == null || string.IsNullOrWhiteSpace(dto.Name))
+                return Results.BadRequest("name is required");
+
+            var name = dto.Name.Trim();
+            if (string.Equals(name, "auth", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("auth:", StringComparison.OrdinalIgnoreCase))
+                return Results.StatusCode(403);
+
+            using var conn = await db.OpenMasterAsync(ct);
+            var affected = await conn.ExecuteAsync(new CommandDefinition(
+                "update applicationparams set value = @Value where name = @Name",
+                new { Name = name, dto.Value }, cancellationToken: ct));
+            if (affected == 0)
+                await conn.ExecuteAsync(new CommandDefinition(
+                    "insert into applicationparams (name, value) values (@Name, @Value)",
+                    new { Name = name, dto.Value }, cancellationToken: ct));
+            return Results.NoContent();
+        }).WithName("UpsertApplicationParams");
     }
 }

@@ -20,7 +20,7 @@ public sealed class BackupOptions
     public string? BackupRoot { get; set; }
     public int Port { get; set; } = 5433;
     public string SuperUser { get; set; } = "postgres";
-    public string SuperPwd { get; set; } = "postgres";
+    public string SuperPwd { get; set; } = "Pass@123";
     public int Keep { get; set; } = 30;
 
     public string ResolvedScriptsDir =>

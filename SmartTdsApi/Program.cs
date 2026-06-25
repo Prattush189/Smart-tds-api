@@ -21,16 +21,22 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseWindowsService();
 
 // ---- Support file log: every Warning+ (incl. the unhandled-exception handler's
-// full stack traces) also lands in a daily file the user can just send us —
-// Windows: C:\ProgramData\SmartTds\logs\api-<yyyyMMdd>.log (same folder as the
-// install log); Linux VPS: <app>/logs. Event Log / journalctl keep working. ----
+// full stack traces) also lands in a daily file the user can just send us. It lives
+// NEXT TO the app (…\api -> …\Data\logs), same drive the firm installed to — NOT on
+// C:\ProgramData — so the whole SmartTds data set stays off the Windows drive and honours
+// installs on a non-C: drive (same folder as the install log). Linux VPS: <app>/logs.
 var supportLogDir = OperatingSystem.IsWindows()
-    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds", "logs")
+    ? Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Data", "logs"))
     : Path.Combine(AppContext.BaseDirectory, "logs");
 builder.Logging.AddProvider(new SmartTdsApi.Logging.FileLoggerProvider(supportLogDir));
 
 // ---- Options (env vars override, e.g. Db__Password, Jwt__Key) ----
 builder.Services.Configure<DbOptions>(builder.Configuration.GetSection("Db"));
+// LOCAL mode: the DB password is a FIXED constant baked into every install. Hardcode it here
+// (after binding) so the API never depends on appsettings.Local.json for it — this is the
+// permanent cure for the role<->file password drift. Online/cloud keeps its real secret.
+if (builder.Environment.IsEnvironment("Local"))
+    builder.Services.PostConfigure<DbOptions>(o => o.Password = DbOptions.LocalPassword);
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 
 builder.Services.AddHttpContextAccessor();   // lets DbConnectionFactory read the JWT prodkey for RLS
@@ -210,7 +216,13 @@ app.MapGet("/health", async (SmartTdsApi.Data.IDbConnectionFactory db, Cancellat
         using var conn = await db.OpenMasterAsync(ct);
         master = conn.Database;   // = "masterdbtds" when the master DB is reachable
     }
-    catch { /* master DB down/missing -> master stays null */ }
+    catch (Exception ex)
+    {
+        // Log WHY master is null — /health is the first thing checked when login fails, and a
+        // silent catch left no trace of the real DB error (28P01 password drift / connection
+        // refused / database missing). Now it lands in the api-<date>.log.
+        app.Logger.LogWarning(ex, "Health check: master DB unreachable");
+    }
     // `name` lets the desktop's Server list show a friendly machine name instead of a bare IP.
     return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow });
 }).AllowAnonymous();

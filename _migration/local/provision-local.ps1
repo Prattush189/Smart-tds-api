@@ -30,7 +30,7 @@ param(
   [string]   $PgZip,                                   # EDB binaries zip (first install)
   [string]   $PgBin,                                   # or an existing pgsql\bin
   [int]      $Port        = 5433,
-  [string]   $SuperPwd    = "postgres",                # local superuser pwd (local-only)
+  [string]   $SuperPwd    = "Pass@123",                # local superuser pwd (FIXED across all installs for support)
   [string]   $AppPwd,                                  # smarttds_app pwd (random if blank)
   [string[]] $Years       = @("25","26"),
   [string]   $AdminUser   = "admin",
@@ -55,7 +55,11 @@ function New-RandomBase64([int]$count) {
   return [Convert]::ToBase64String($b)
 }
 
-if (-not $AppPwd) { $AppPwd = New-RandomBase64 18 }
+# FIXED app-role password across ALL installs (senior's decision: one known password for
+# easier remote support; the local PG only listens on 127.0.0.1 and smarttds_app is
+# least-privilege). A fixed value also removes the per-install random->config drift that
+# caused "28P01 / master:null". Override with -AppPwd only if you really need a unique one.
+if (-not $AppPwd) { $AppPwd = "Pass@123" }
 $prodkey  = $LicenceKey.Trim().ToUpperInvariant()
 
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
@@ -95,13 +99,34 @@ Say "PostgreSQL bin: $PgBin"
 # ===================================================================== #
 # 2) initialise a private cluster (once)
 # ===================================================================== #
+# A data dir that EXISTS but has NO PG_VERSION is a half-initialised / corrupt cluster (a
+# prior initdb was interrupted, or files were only partly written/copied). initdb refuses a
+# non-empty target, so a re-install would fail here every time ("a program run as part of
+# the setup did not finish") and killing services does nothing for it. Such a dir holds no
+# real data — a valid cluster ALWAYS has PG_VERSION — so clear it and init fresh.
+if ((Test-Path $dataDir) -and -not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
+  Say "Data dir exists but is not a valid cluster (no PG_VERSION) - clearing for a fresh init" "Yellow"
+  Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 if (-not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
   Say "Initialising private cluster -> $dataDir"
   $pwfile = Join-Path $env:TEMP "_sttds_pw.txt"
   Set-Content -Path $pwfile -Value $SuperPwd -NoNewline -Encoding ascii
   $r = Run-Native $initdb @("-D",$dataDir,"-U","postgres","-A","scram-sha-256","--pwfile=$pwfile","-E","UTF8")
   Remove-Item $pwfile -Force -ErrorAction SilentlyContinue
-  if ($r.Code -ne 0) { Write-Host $r.Out -ForegroundColor Red; throw "initdb failed" }
+  if ($r.Code -ne 0) {
+    Write-Host $r.Out -ForegroundColor Red
+    # Surface the exit code + output IN the throw so the install transcript names the cause
+    # (the previous bare "initdb failed" hid it). Empty output + a huge/negative exit code
+    # (e.g. -1073741515 / 0xC0000135 STATUS_DLL_NOT_FOUND) means initdb.exe could not even
+    # launch — almost always the Microsoft Visual C++ Redistributable (x64) is missing on
+    # the target machine (the EDB "binaries-only" PostgreSQL zip depends on it).
+    $hint = ""
+    if (("$($r.Out)").Trim().Length -eq 0) {
+      $hint = "  (no initdb output: initdb.exe likely failed to launch - install the Microsoft Visual C++ Redistributable x64 on this machine)"
+    }
+    throw ("initdb failed (exit " + $r.Code + "): " + ("$($r.Out)").Trim() + $hint)
+  }
 
   # bind private + on a non-default port so we never clash with another PG; IST clock
   $conf = Join-Path $dataDir "postgresql.conf"
@@ -113,6 +138,19 @@ if (-not (Test-Path (Join-Path $dataDir "PG_VERSION"))) {
 # ===================================================================== #
 # 3) start the server
 # ===================================================================== #
+# A postgres that was KILLED (not cleanly stopped) — e.g. by the installer's clean-slate or
+# a crash — leaves a stale postmaster.pid lock. If nothing is actually listening on our
+# port, that lock is stale: remove it so pg_ctl start does not refuse with "lock file
+# postmaster.pid already exists / is another postmaster (PID ...) running" (which fails the
+# MSI). A genuinely running server (status below reports it) is left untouched.
+$pidFile = Join-Path $dataDir "postmaster.pid"
+if (Test-Path $pidFile) {
+  $listening = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+  if ($listening.Count -eq 0) {
+    Say "Removing stale postmaster.pid (nothing listening on $Port)" "Yellow"
+    Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
+  }
+}
 $status = Run-Native $pgctl @("-D",$dataDir,"status")
 if ($status.Out -notmatch "server is running") {
   Say "Starting PostgreSQL on 127.0.0.1:$Port"
@@ -136,6 +174,28 @@ if ($status.Out -notmatch "server is running") {
 } else {
   Say "PostgreSQL already running" "Yellow"
 }
+
+# ---- ensure the postgres superuser password is the FIXED value (heals upgrades) ----
+# A FRESH cluster already has $SuperPwd (initdb --pwfile above). An EXISTING cluster from an
+# older install may still carry a different superuser password (e.g. the legacy "postgres"),
+# so connecting with $SuperPwd would fail. Find the password that works from a small
+# candidate list, then ALTER the superuser to $SuperPwd — every install converges to one
+# known value (backup/restore/migrate all rely on it).
+$env:PGPASSWORD = $SuperPwd
+$superOk = ((Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U","postgres","-d","postgres","-tAc","select 1")).Code -eq 0)
+if (-not $superOk) {
+  foreach ($cand in @('postgres','pw')) {
+    $env:PGPASSWORD = $cand
+    if ((Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U","postgres","-d","postgres","-tAc","select 1")).Code -eq 0) {
+      Say "Updating superuser password to the fixed value" "Yellow"
+      Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U","postgres","-d","postgres","-c",("alter user postgres password '" + $SuperPwd.Replace("'","''") + "'")) | Out-Null
+      $env:PGPASSWORD = $SuperPwd
+      $superOk = $true
+      break
+    }
+  }
+}
+if (-not $superOk) { throw "Could not authenticate as the postgres superuser with any known password (tried the configured one, 'postgres', 'pw')." }
 
 # ---- psql helpers (superuser, local) ----
 $env:PGPASSWORD = $SuperPwd
@@ -256,17 +316,47 @@ if ($ApiDir) {
       $j | Add-Member -NotePropertyName Backup -NotePropertyValue ([pscustomobject]@{})
     }
     $j.Backup | Add-Member -NotePropertyName PgBin -NotePropertyValue $PgBin -Force
+    # Backups live next to the app (same drive), NOT C:\ProgramData. Tell the API where to
+    # write/list them so its Backup screen matches what the scripts produce. (The API's
+    # RunScript forwards this as -BackupRoot to backup-local.ps1.)
+    $j.Backup | Add-Member -NotePropertyName BackupRoot -NotePropertyValue (Join-Path $InstallRoot "backups") -Force
     ($j | ConvertTo-Json -Depth 8) | Set-Content -Path $cfg -Encoding utf8
 
-    # BULLETPROOF: set the role password to EXACTLY what the API will read from the
-    # file we just wrote. This eliminates any role<->config drift (the recurring
-    # "28P01 password authentication failed" / login 500), whatever caused it.
-    $apiPw = (Get-Content $cfg -Raw | ConvertFrom-Json).Db.Password
-    if ($apiPw) {
-      Psql-Cmd "postgres" ("ALTER ROLE smarttds_app PASSWORD '" + $apiPw.Replace("'","''") + "';")
-      Say "  Role password synced to API config."
+    # Set the role to the FIXED local constant ($AppPwd = Pass@123). The API hardcodes the
+    # same constant in Local mode (DbOptions.LocalPassword), so role + API always match.
+    # Deliberately NOT read back from appsettings: a preserved/stale file must never be able
+    # to set a wrong role password (that was the recurring "28P01" drift). The constant is
+    # the single source of truth on both sides.
+    Psql-Cmd "postgres" ("ALTER ROLE smarttds_app PASSWORD '" + $AppPwd.Replace("'","''") + "';")
+    Say "  Role password set to the fixed local value."
+  } else {
+    # appsettings.Local.json is MISSING (not packaged by the installer, or removed). Without
+    # it the API falls back to the placeholder appsettings.json (port 55432 / password "pw")
+    # and can NEVER reach the local DB -> /health master:null -> login "unexpected error".
+    # So CREATE it from scratch with THIS machine's real values, and sync the role to match.
+    Say "appsettings.Local.json missing at $ApiDir - creating it" "Yellow"
+    $newCfg = [pscustomobject]@{
+      "//"         = "LOCAL profile (auto-created by provision-local because it was missing). Activated by ASPNETCORE_ENVIRONMENT=Local."
+      AllowedHosts = "*"
+      Urls         = "http://127.0.0.1:5080"
+      Logging      = [pscustomobject]@{ LogLevel = [pscustomobject]@{ Default = "Information"; "Microsoft.AspNetCore" = "Warning" } }
+      Db           = [pscustomobject]@{
+        Host = "127.0.0.1"; Port = $Port; Username = "smarttds_app"; Password = $AppPwd
+        MasterDatabase = "masterdbtds"; YearDatabaseTemplate = "smarttds{0}"
+      }
+      Jwt          = [pscustomobject]@{ Issuer = "SmartTdsApi"; Audience = "SmartTdsClient"; Key = (New-RandomBase64 48); ExpiryMinutes = 480 }
+      Licensing    = [pscustomobject]@{
+        Mode = "Local"
+        ServiceUrls = @("http://www.smartbizin.com/checking/ServiceUL.svc", "http://www.smartbizindia.com/checking/ServiceUL.svc")
+        Auth = "Hello.123"; ProductName = "stdsN"; LicenceType = "Paid"; RecheckHours = 24
+      }
+      Backup       = [pscustomobject]@{ PgBin = $PgBin; BackupRoot = (Join-Path $InstallRoot "backups") }
     }
-  } else { Say "  (no appsettings.Local.json at $ApiDir - skip)" "Yellow" }
+    ($newCfg | ConvertTo-Json -Depth 8) | Set-Content -Path $cfg -Encoding utf8
+    # The role must match the password we just wrote so the API can connect.
+    Psql-Cmd "postgres" ("ALTER ROLE smarttds_app PASSWORD '" + $AppPwd.Replace("'", "''") + "';")
+    Say "  Created appsettings.Local.json and synced the role password."
+  }
 }
 
 Say "`nDONE." "Green"

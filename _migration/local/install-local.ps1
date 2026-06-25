@@ -28,7 +28,7 @@ param(
   [string] $AdminPwd   = "admin",
   [int]    $ApiPort    = 5080,
   [int]    $PgPort     = 5433,
-  [string] $DataRoot   = (Join-Path $env:ProgramData "SmartTds"),
+  [string] $DataRoot   = "",                       # default: <AppDir>\Data (next to the app, derived below). Pass -DataRoot to relocate.
   [switch] $Lan,                                  # open the API port for the office LAN
   [switch] $Uninstall,
   [switch] $PurgeData,                            # on uninstall, delete the PG data (KEEPS the backups\ folder)
@@ -47,6 +47,16 @@ function Say($m,$c="Cyan"){ Write-Host $m -ForegroundColor $c }
 $scriptDir = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($scriptDir)) { $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $AppDir = Split-Path -Parent (Split-Path -Parent $scriptDir)   # ...\_migration\local -> ...\_migration -> APPDIR
+
+# Co-locate ALL runtime data (PostgreSQL cluster, backups, logs) with the app — i.e. on the
+# SAME drive the firm installed to — instead of C:\ProgramData. Firms that deliberately
+# install off the Windows drive (to keep the DB safe from a Windows reinstall/corruption)
+# then get their data there automatically. Override with -DataRoot to relocate. Falls back
+# to ProgramData only if AppDir couldn't be determined.
+if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+  $DataRoot = if ([string]::IsNullOrWhiteSpace($AppDir)) { Join-Path $env:ProgramData "SmartTds" } else { Join-Path $AppDir "Data" }
+}
+Say ("Data root: {0}" -f $DataRoot)
 
 $here    = Join-Path $AppDir "_migration\local"
 $pgBin   = Join-Path $AppDir "pgsql\bin"
@@ -194,12 +204,12 @@ schtasks /Delete /TN SmartTdsCleanup /F
   # client's data. A silent MSI custom action can't prompt the user, so existing data is
   # protected automatically. Non-fatal: a fresh install (no assessees yet) just skips it.
   try {
-    $env:PGPASSWORD = "postgres"
+    $env:PGPASSWORD = "Pass@123"
     $existing = & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d masterdbtds -tAc "select count(*) from assessee" 2>$null
     if (((("$existing").Trim()) -as [int]) -gt 0) {
       Say "== existing data found - taking a safety backup before upgrade =="
       & (Join-Path $here "backup-local.ps1") -InstallRoot $DataRoot -PgBin $pgBin -Port $PgPort `
-          -SuperUser postgres -SuperPwd postgres -Label preupgrade -Keep 30 | Out-Null
+          -SuperUser postgres -SuperPwd "Pass@123" -Label preupgrade -Keep 30 | Out-Null
     }
   } catch { Say ("pre-upgrade safety backup skipped (non-fatal): " + $_.Exception.Message) "Yellow" }
 
@@ -210,7 +220,14 @@ schtasks /Delete /TN SmartTdsCleanup /F
   # 2) stop the provisioning-started server so it can be re-owned by a Windows service (same data dir)
   Say "== handing PostgreSQL over to a service =="
   $pgctl = Join-Path $pgBin "pg_ctl.exe"
-  if (Test-Path $pgctl) { & $pgctl -D $dataDir -m fast stop }
+  if (Test-Path $pgctl) {
+    # EAP=Continue: pg_ctl writes its "waiting for server to shut down... done" progress to
+    # stderr, which under this script's global EAP=Stop can surface as a terminating
+    # NativeCommandError and fail the MSI even though the stop itself succeeded.
+    $prevStopEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & $pgctl -D $dataDir -m fast stop 2>&1 | Out-Null } catch { }
+    finally { $ErrorActionPreference = $prevStopEap }
+  }
 
   # 3) register PostgreSQL + API as auto-start services and start them
   Say "== installing services =="
@@ -225,7 +242,7 @@ schtasks /Delete /TN SmartTdsCleanup /F
     $latest = Get-ChildItem $backupsDir -Filter "SmartTdsBackup_*.zip" -ErrorAction SilentlyContinue |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($latest) {
-      $env:PGPASSWORD = "postgres"
+      $env:PGPASSWORD = "Pass@123"
       $cnt = & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d masterdbtds -tAc "select count(*) from assessee" 2>$null
       if (("$cnt".Trim()) -eq "0") {
         Say ("== restoring most recent backup: " + $latest.Name + " ==")
@@ -264,26 +281,19 @@ schtasks /Delete /TN SmartTdsCleanup /F
     $x.Save($cfg)
   } else { Say "  (no SmartTdsWinUI.exe.Config at $AppDir - skip; client PCs set ApiBaseUrl to the server's LAN IP)" "Yellow" }
 
-  # FINAL role<->config password sync — runs LAST, after the MSI's file copies, the
-  # provision patch and the restore, so whatever appsettings.Local.json ends up on disk
-  # is what the role password matches. Root cause this heals: the MSI lays down the
-  # PACKAGED appsettings (e.g. a stale dist\api build) with an old password while
-  # provisioning set the role to a fresh random one -> every API call died with
-  # "28P01 password authentication failed". Re-read the file, ALTER ROLE to its value,
-  # bounce the API so it reconnects.
+  # FINAL role password set — runs LAST and forces the smarttds_app role to the FIXED local
+  # constant (Pass@123), then bounces the API. The API hardcodes the SAME constant in Local
+  # mode (DbOptions.LocalPassword), so this guarantees a match no matter what appsettings.Local.json
+  # ends up holding. Deliberately does NOT read the password from appsettings: on an MSI UPGRADE
+  # that preserves an old/patched appsettings, reading it would set the role to a STALE value and
+  # re-break login ("28P01") - the very bug we kept hitting. The constant is the single source of truth.
   try {
-    $cfgFinal = Join-Path $apiDir "appsettings.Local.json"
-    if (Test-Path $cfgFinal) {
-      $apiPwFinal = (Get-Content $cfgFinal -Raw | ConvertFrom-Json).Db.Password
-      if ($apiPwFinal) {
-        $env:PGPASSWORD = "postgres"
-        & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d postgres `
-          -c ("alter role smarttds_app password '" + $apiPwFinal.Replace("'","''") + "'") | Out-Null
-        Restart-Service SmartTdsApi -ErrorAction SilentlyContinue
-        Say "Final role<->config password sync done."
-      }
-    }
-  } catch { Say ("final password sync warning (ignored): " + $_.Exception.Message) "Yellow" }
+    $env:PGPASSWORD = "Pass@123"
+    & (Join-Path $pgBin "psql.exe") -h 127.0.0.1 -p $PgPort -U postgres -d postgres `
+      -c "alter role smarttds_app password 'Pass@123'" | Out-Null
+    Restart-Service SmartTdsApi -ErrorAction SilentlyContinue
+    Say "Role password set to the fixed local value + API restarted."
+  } catch { Say ("final password set warning (ignored): " + $_.Exception.Message) "Yellow" }
 
   # ---- LOCK DOWN the secrets (security) ----
   # Remove the default "Users" read from the SPECIFIC sensitive paths, keeping SYSTEM (the
@@ -324,14 +334,15 @@ schtasks /Delete /TN SmartTdsCleanup /F
         $sha  = [System.Security.Cryptography.SHA256]::Create().ComputeHash(
                   [System.Text.Encoding]::UTF8.GetBytes("SmartTds.MachineId.v2|winguid:$guid"))
         $mid  = ([System.BitConverter]::ToString($sha) -replace '-','').Substring(0,16)
-        $appPw = $null
-        try { $appPw = (Get-Content (Join-Path $apiDir "appsettings.Local.json") -Raw | ConvertFrom-Json).Db.Password } catch {}
+        # FIXED local app-role password (matches provision + the API's hardcoded DbOptions.LocalPassword).
+        # Reported as-is so support always sees the real value, not a possibly-stale appsettings copy.
+        $appPw = "Pass@123"
         $payload = @{
           machineId   = $mid
           machineName = $env:COMPUTERNAME
           dbPort      = $PgPort
           superUser   = "postgres"
-          superPwd    = "postgres"     # local superuser pw (see provision-local.ps1)
+          superPwd    = "Pass@123"     # local superuser pw (FIXED across installs; see provision-local.ps1)
           appRoleUser = "smarttds_app"
           appRolePwd  = $appPw
           appVersion  = ""

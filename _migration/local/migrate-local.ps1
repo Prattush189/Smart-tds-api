@@ -27,7 +27,7 @@
 
   Usage:
     powershell -ExecutionPolicy Bypass -File migrate-local.ps1
-    powershell -ExecutionPolicy Bypass -File migrate-local.ps1 -Port 5433 -SuperPwd postgres
+    powershell -ExecutionPolicy Bypass -File migrate-local.ps1 -Port 5433 -SuperPwd Pass@123
 #>
 [CmdletBinding()]
 param(
@@ -35,7 +35,7 @@ param(
   [string] $PgBin,                                  # default <InstallRoot>\pgsql\bin
   [int]    $Port      = 5433,
   [string] $SuperUser = "postgres",
-  [string] $SuperPwd  = "postgres",
+  [string] $SuperPwd  = "Pass@123",
   [string] $MigrationsDir,                          # default <script dir>\migrations
   [string] $GrantsSql                               # default ..\phase5\01_least_privilege_role.sql
 )

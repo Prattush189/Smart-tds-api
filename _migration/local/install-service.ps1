@@ -90,6 +90,10 @@ if ($ApiExe) {
     & sc.exe create $ApiServiceName binPath= $bin start= auto DisplayName= "SmartTds Local API" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "sc create failed ($LASTEXITCODE)" }
   }
+  # The API needs PostgreSQL: make Windows start PG first and not consider the API
+  # "started" until PG is up (prevents the API running with no DB -> /health master:null
+  # at first login, e.g. after a reboot).
+  if ($PgBin) { & sc.exe config $ApiServiceName depend= $PgServiceName | Out-Null }
   & sc.exe failure $ApiServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
   Restart-Service $ApiServiceName -ErrorAction SilentlyContinue
   Start-Service   $ApiServiceName -ErrorAction SilentlyContinue
