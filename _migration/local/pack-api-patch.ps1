@@ -41,6 +41,11 @@ param(
 )
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+# .NET APIs (ZipFile.CreateFromDirectory, GetFileHash, etc.) resolve RELATIVE paths
+# against the PROCESS working directory, which in PowerShell is NOT the shell's current
+# location ($PWD). Sync them so relative -ApiDist / -OutDir behave as the user expects
+# (otherwise "..\updates" resolved from the wrong base).
+[System.IO.Directory]::SetCurrentDirectory((Get-Location).Path)
 
 $dll = Join-Path $ApiDist "SmartTdsApi.dll"
 if (-not (Test-Path $dll)) { throw "SmartTdsApi.dll not found in $ApiDist. Run publish-local.ps1 first." }
@@ -51,6 +56,7 @@ if (-not $ver) { throw "Could not read FileVersion from $dll" }
 Write-Host ">> API version: $ver" -ForegroundColor Cyan
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$OutDir = (Resolve-Path $OutDir).Path          # absolute, so the zip/stage paths are unambiguous
 $stage = Join-Path $OutDir ("_stage_" + $ver)
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "api") | Out-Null
