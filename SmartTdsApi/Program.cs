@@ -227,7 +227,10 @@ app.MapGet("/health", async (SmartTdsApi.Data.IDbConnectionFactory db, Cancellat
     // `version` lets a LAN client read the server's API version (it has no local \api to
     // inspect) so it can prompt the user to run the updater on the server machine.
     var version = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString();
-    return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow, version });
+    // surface the startup-migration outcome so a failed/half-applied migration is visible
+    // (otherwise the API silently serves a stale schema → unrelated-looking 500s downstream).
+    var migrations = SmartTdsApi.Endpoints.BackupEndpoints.MigrationsStatus;
+    return Results.Ok(new { status = "ok", master, name = Environment.MachineName, utc = DateTime.UtcNow, version, migrations });
 }).AllowAnonymous();
 
 app.MapAuthEndpoints();

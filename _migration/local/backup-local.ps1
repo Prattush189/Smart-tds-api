@@ -103,9 +103,14 @@ try {
     $d = Run-Native $pgDump @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d",$db,"-Fc","-f",(Join-Path $work "$db.dump"))
     if ($d.Code -ne 0) { Write-Host $d.Out -ForegroundColor Red; throw "pg_dump failed for $db" }
   }
+  # prodkey of THIS install — stamped into the manifest so a restore can REFUSE a backup
+  # taken under a DIFFERENT licence. Best-effort; blank if users is empty (old/empty DB).
+  $pkRes = Run-Native $psql @("-h","127.0.0.1","-p","$Port","-U",$SuperUser,"-d","masterdbtds","-tAc","select prodkey from users where prodkey is not null and prodkey <> '' order by userid limit 1")
+  $prodkey = if ($pkRes.Code -eq 0) { $pkRes.Out.Trim() } else { "" }
+
   # manifest
   $manifest = [ordered]@{
-    product="SmartTds"; created=$stamp; label=$Label; licence=$Licence
+    product="SmartTds"; created=$stamp; label=$Label; licence=$Licence; prodkey=$prodkey
     pg_server_version=$pgver; databases=$dbs; format="custom (pg_dump -Fc)"
   }
   ($manifest | ConvertTo-Json -Depth 5) | Set-Content -Path (Join-Path $work "manifest.json") -Encoding utf8

@@ -36,6 +36,7 @@ public static class AssesseeResStatusEndpoints
         // POST /api/assesseeresstatus — insert; modifiedon=now(); returns { id }.
         grp.MapPost("/", async (AssesseeResStatusReq body, IDbConnectionFactory db, CancellationToken ct) =>
         {
+            if (body.ayId <= 0) return Results.BadRequest(new { error = "ayId is required" });
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = @"insert into assesseeresstatus (subcode, ayid, resstatus, modifiedon, resstatusval)
                                  values (@subCode, @ayId, @resStatus, now(), @resStatusVal)
@@ -50,6 +51,7 @@ public static class AssesseeResStatusEndpoints
         // PUT /api/assesseeresstatus/{id} — update; modifiedon=now().
         grp.MapPut("/{id:int}", async (int id, AssesseeResStatusReq body, IDbConnectionFactory db, CancellationToken ct) =>
         {
+            if (body.ayId <= 0) return Results.BadRequest(new { error = "ayId is required" });
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = @"update assesseeresstatus
                                  set subcode = @subCode, ayid = @ayId, resstatus = @resStatus,

@@ -469,13 +469,22 @@ public static class MastersEndpoints
                 return Results.StatusCode(403);
 
             using var conn = await db.OpenMasterAsync(ct);
+            using var tx = conn.BeginTransaction();
+            // applicationparams.name has no unique constraint, so a plain update-then-insert
+            // can race two concurrent PUTs into duplicate rows (and ON CONFLICT can't be used
+            // without that constraint). Serialize per-name with a transaction-scoped advisory
+            // lock — the same pattern the billing nextno endpoints use.
+            await conn.ExecuteAsync(new CommandDefinition(
+                "select pg_advisory_xact_lock(hashtext(@key))",
+                new { key = "applicationparams:" + name }, tx, cancellationToken: ct));
             var affected = await conn.ExecuteAsync(new CommandDefinition(
                 "update applicationparams set value = @Value where name = @Name",
-                new { Name = name, dto.Value }, cancellationToken: ct));
+                new { Name = name, dto.Value }, tx, cancellationToken: ct));
             if (affected == 0)
                 await conn.ExecuteAsync(new CommandDefinition(
                     "insert into applicationparams (name, value) values (@Name, @Value)",
-                    new { Name = name, dto.Value }, cancellationToken: ct));
+                    new { Name = name, dto.Value }, tx, cancellationToken: ct));
+            tx.Commit();
             return Results.NoContent();
         }).WithName("UpsertApplicationParams");
     }

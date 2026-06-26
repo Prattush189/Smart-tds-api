@@ -44,6 +44,11 @@ public sealed class BackupOptions
 /// </summary>
 public static class BackupEndpoints
 {
+    /// <summary>Startup-migration outcome, surfaced by /health so a failed/half-applied
+    /// migration is visible to operators instead of silently serving a stale schema.
+    /// One of: "skipped" (online mode), "pending", "ok", "failed".</summary>
+    public static volatile string MigrationsStatus = "pending";
+
     public static void MapBackupEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/backups").RequireAuthorization();
@@ -107,15 +112,32 @@ public static class BackupEndpoints
             var path = SafeBackupPath(o.ResolvedBackupRoot, file);
             if (path is null || !File.Exists(path)) return Results.NotFound();
 
+            // Refuse a backup taken under a DIFFERENT licence (prodkey) — restoring it would
+            // overwrite this firm's data with another firm's. backup-local.ps1 stamps the
+            // prodkey into the zip's manifest.json. Older backups with no prodkey can't be
+            // verified, so they're allowed (don't break existing backups).
+            var backupProdKey = TryReadBackupProdKey(path);
+            var userProdKey = user.FindFirstValue("prodkey");
+            if (!string.IsNullOrEmpty(backupProdKey) && !string.IsNullOrEmpty(userProdKey)
+                && !string.Equals(backupProdKey, userProdKey, StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new { error = "Restore canceled: product key not same." }, statusCode: 409);
+
             // write a wrapper .cmd (avoids schtasks nested-quote pain), then run it as a
             // detached one-shot SYSTEM task.
             var script = Path.Combine(o.ResolvedScriptsDir, "restore-local.ps1");
-            var wrapper = Path.Combine(o.ResolvedBackupRoot, "_restore-run.cmd");
+            // Write the launcher to a UNIQUE temp path — NOT the backups folder. That folder
+            // is ACL-locked (client PII) and watched by Defender Controlled-Folder-Access, and
+            // a FIXED-name wrapper there could be left locked/quarantined by a prior run (AV
+            // flags a .cmd that runs PowerShell with a DB password), so every later restore
+            // died with UnauthorizedAccessException trying to overwrite it. A fresh GUID name
+            // in TEMP can never collide with a locked leftover; the wrapper self-deletes after.
+            var wrapper = Path.Combine(Path.GetTempPath(), "SmartTdsRestore_" + Guid.NewGuid().ToString("N") + ".cmd");
             File.WriteAllText(wrapper,
                 "@echo off\r\n" +
                 $"powershell.exe -ExecutionPolicy Bypass -NoProfile -File \"{script}\" " +
                 $"-BackupZip \"{path}\" -PgBin \"{o.ResolvedPgBin}\" -Port {o.Port} " +
-                $"-SuperUser {o.SuperUser} -SuperPwd {o.SuperPwd} -Force\r\n");
+                $"-SuperUser {o.SuperUser} -SuperPwd {o.SuperPwd} -Force\r\n" +
+                "del \"%~f0\"\r\n");
 
             RunQuick("schtasks.exe", $"/Create /TN SmartTdsRestore /TR \"{wrapper}\" /SC ONCE /ST 23:59 /RU SYSTEM /RL HIGHEST /F");
             RunQuick("schtasks.exe", "/Run /TN SmartTdsRestore");
@@ -147,18 +169,19 @@ public static class BackupEndpoints
     public static void RunMigrationsOnStartup(IServiceProvider sp)
     {
         var lic = sp.GetRequiredService<IOptions<LicensingOptions>>().Value;
-        if (!lic.IsLocal) return;
+        if (!lic.IsLocal) { MigrationsStatus = "skipped"; return; }
         var opt = sp.GetRequiredService<IOptions<BackupOptions>>().Value;
         var log = sp.GetService<ILoggerFactory>()?.CreateLogger("Migrations");
+        MigrationsStatus = "pending";
         _ = Task.Run(async () =>
         {
             try
             {
                 var (code, so, se) = await RunScript(opt, "migrate-local.ps1", Array.Empty<string>(), CancellationToken.None);
-                if (code != 0) log?.LogError("Startup migrations failed: {Err}", Tail(se + so));
-                else log?.LogInformation("Startup migrations ok: {Out}", Tail(so, 400));
+                if (code != 0) { MigrationsStatus = "failed"; log?.LogError("Startup migrations failed: {Err}", Tail(se + so)); }
+                else { MigrationsStatus = "ok"; log?.LogInformation("Startup migrations ok: {Out}", Tail(so, 400)); }
             }
-            catch (Exception ex) { log?.LogError(ex, "Startup migrations threw"); }
+            catch (Exception ex) { MigrationsStatus = "failed"; log?.LogError(ex, "Startup migrations threw"); }
         });
     }
 
@@ -180,12 +203,31 @@ public static class BackupEndpoints
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                // pin cwd to the app dir; a Windows service otherwise inherits C:\Windows\System32
+                WorkingDirectory = AppContext.BaseDirectory
             };
             using var p = Process.Start(psi);
             p?.WaitForExit(15000);
         }
         catch { /* ignore — restore task creation is best-effort */ }
+    }
+
+    // Read the prodkey stamped in the backup zip's manifest.json (by backup-local.ps1).
+    // Returns null when the zip has no manifest / no prodkey (older backups) — the caller
+    // then can't verify the licence and allows the restore.
+    private static string? TryReadBackupProdKey(string zipPath)
+    {
+        try
+        {
+            using var zip = System.IO.Compression.ZipFile.OpenRead(zipPath);
+            var entry = zip.GetEntry("manifest.json");
+            if (entry is null) return null;
+            using var s = entry.Open();
+            using var doc = System.Text.Json.JsonDocument.Parse(s);
+            return doc.RootElement.TryGetProperty("prodkey", out var pk) ? pk.GetString() : null;
+        }
+        catch { return null; }   // unreadable/old manifest -> can't verify, allow
     }
 
     // resolve a user-supplied file name strictly inside BackupRoot (no traversal)
@@ -207,7 +249,14 @@ public static class BackupEndpoints
             "-Port", o.Port.ToString(), "-SuperUser", o.SuperUser, "-SuperPwd", o.SuperPwd
         };
         args.Add("-PgBin"); args.Add(o.ResolvedPgBin);   // always: pgsql is under the app dir, not ProgramData
-        if (!string.IsNullOrEmpty(o.BackupRoot)) { args.Add("-BackupRoot"); args.Add(o.BackupRoot!); }
+        // -BackupRoot ONLY for the scripts that declare it (backup-local.ps1 / restore-local.ps1).
+        // migrate-local.ps1 has no such parameter, so passing it made EVERY startup migration
+        // fail ("A parameter cannot be found that matches parameter name 'BackupRoot'") on any
+        // install where Backup:BackupRoot is configured — i.e. migrations never applied.
+        if (!string.IsNullOrEmpty(o.BackupRoot)
+            && (script.Equals("backup-local.ps1", StringComparison.OrdinalIgnoreCase)
+             || script.Equals("restore-local.ps1", StringComparison.OrdinalIgnoreCase)))
+        { args.Add("-BackupRoot"); args.Add(o.BackupRoot!); }
         args.AddRange(extra);
 
         var psi = new ProcessStartInfo("powershell.exe")
@@ -215,7 +264,11 @@ public static class BackupEndpoints
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            // pin cwd to the app dir; a Windows service otherwise inherits C:\Windows\System32,
+            // so any relative path inside the .ps1 (or its pg_dump/psql children) would resolve
+            // against system32 instead of the install.
+            WorkingDirectory = AppContext.BaseDirectory
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
 

@@ -351,8 +351,11 @@ public sealed class LicenceService
         var path = _opt.MachineIdFile;
         if (string.IsNullOrWhiteSpace(path))
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "SmartTds");
-            path = Path.Combine(dir, "machineid.dat");
+            // Co-locate with the install data (<AppDir>\Data\machineid.dat), matching the
+            // backup/log convention — NOT C:\ProgramData\SmartTds (the last ProgramData
+            // site). Only used on the rare last-resort path where no hardware identity is
+            // readable; MachineIdFile config still overrides.
+            path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "Data", "machineid.dat"));
         }
 
         var hw = TryHardwareIdentity();

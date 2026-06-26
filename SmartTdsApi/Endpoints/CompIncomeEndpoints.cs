@@ -215,7 +215,7 @@ public static class CompIncomeEndpoints
             try
             {
                 using var conn = await db.OpenYearAsync(year, ct);
-                const string sql = "delete from tdscompincome where id = @id";
+                const string sql = "update tdscompincome set isdeleted = true, modifiedon = now() where id = @id";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return Results.NoContent();
             }

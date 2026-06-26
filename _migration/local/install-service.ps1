@@ -28,6 +28,13 @@ param(
   [int]    $BackupKeep     = 30,                     # rolling daily backups to retain
   [switch] $NoBackupTask,                            # skip registering the daily backup task
   [string] $BackupTaskName = "SmartTds Daily Backup",
+  # network shares for LAN clients (updates feed + docs). Created idempotently HERE because
+  # Advanced Installer's native "share folders" action is NOT idempotent — on a re-install it
+  # aborts with "The name has already been shared". Share dirs default to <AppDir>\<name>.
+  [string] $UpdatesShareName = "SmartTds Updates",
+  [string] $DocsShareName    = "SmartTdsDocs",
+  [string] $ShareUsers       = "Everyone",
+  [switch] $NoShares,
   [switch] $Uninstall
 )
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -46,6 +53,35 @@ function Remove-Svc($name){
   } catch { Say ("  (could not remove $($name): " + $_.Exception.Message + ")") "Yellow" }
 }
 
+# <AppDir> = the install root (this script lives at <AppDir>\_migration\local).
+$AppRoot = Split-Path (Split-Path $here -Parent) -Parent
+
+# Idempotent SMB share: create the folder, (re)point an existing share, or make a new one.
+# Best-effort — a share failure must NEVER fail the install (shares are a LAN convenience).
+function Ensure-Share($name,$path,$users){
+  try {
+    if (-not (Test-Path $path)) { New-Item -ItemType Directory -Force -Path $path | Out-Null }
+    $ex = Get-SmbShare -Name $name -ErrorAction SilentlyContinue
+    if ($ex) {
+      if ($ex.Path -ne $path) {
+        Say "  re-sharing '$name' -> $path (was $($ex.Path))" "Yellow"
+        Remove-SmbShare -Name $name -Force -ErrorAction SilentlyContinue | Out-Null
+        New-SmbShare -Name $name -Path $path -FullAccess $users -ErrorAction SilentlyContinue | Out-Null
+      } else { Say "  share '$name' already present" }
+    } else {
+      Say "  sharing '$name' -> $path"
+      New-SmbShare -Name $name -Path $path -FullAccess $users -ErrorAction SilentlyContinue | Out-Null
+    }
+  } catch { Say ("  (share '$name' skipped: " + $_.Exception.Message + ")") "Yellow" }
+}
+function Remove-Share($name){
+  try {
+    if (Get-SmbShare -Name $name -ErrorAction SilentlyContinue) {
+      Say "Removing share $name"; Remove-SmbShare -Name $name -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+  } catch { Say ("  (could not remove share $($name): " + $_.Exception.Message + ")") "Yellow" }
+}
+
 if ($Uninstall) {
   # Best-effort: never let cleanup failures block an uninstall.
   try {
@@ -59,6 +95,7 @@ if ($Uninstall) {
     if ($PgBin) { $pgctl = Join-Path $PgBin "pg_ctl.exe"; if (Test-Path $pgctl) { & $pgctl unregister -N $PgServiceName 2>$null | Out-Null } }
     & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
     & schtasks.exe /Delete /TN "$BackupTaskName" /F 2>$null | Out-Null
+    if (-not $NoShares) { Remove-Share $UpdatesShareName; Remove-Share $DocsShareName }
     Say "Uninstalled." "Green"
   } catch { Say ("uninstall cleanup warning (ignored): " + $_.Exception.Message) "Yellow" }
   exit 0
@@ -115,6 +152,15 @@ if ($LanFirewall) {
   Say "Adding firewall rule for API port $Port (LAN)"
   & netsh advfirewall firewall delete rule name="SmartTds API ($Port)" 2>$null | Out-Null
   & netsh advfirewall firewall add rule name="SmartTds API ($Port)" dir=in action=allow protocol=TCP localport=$Port profile=private | Out-Null
+}
+
+# --- network shares (LAN clients pull the updates feed + docs over \\server\<share>) ---
+# Done here (idempotently) instead of via Advanced Installer's native share action, which
+# aborts on re-install when the share already exists. Safe to re-run.
+if (-not $NoShares) {
+  Say "Ensuring network shares"
+  Ensure-Share $UpdatesShareName (Join-Path $AppRoot "SmartTds Updates") $ShareUsers
+  Ensure-Share $DocsShareName    (Join-Path $AppRoot "SmartTdsDocs")     $ShareUsers
 }
 
 Say "`nDONE." "Green"

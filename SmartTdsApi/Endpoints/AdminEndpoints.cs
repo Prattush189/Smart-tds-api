@@ -166,6 +166,13 @@ public static class AdminEndpoints
             if (!IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
+            // distinguish "no such user" (404) from "user exists but has no recoverable
+            // password on file" (200 + null). pwdenc alone can't tell them apart — a typo'd
+            // username would otherwise return 200/null and look like a passwordless account.
+            var exists = await conn.ExecuteScalarAsync<int?>(new CommandDefinition(
+                "select 1 from users where prodkey=@prodkey and username=@username",
+                new { prodkey, username }, cancellationToken: ct));
+            if (exists is null) return Results.NotFound();
             var enc = await conn.ExecuteScalarAsync<string?>(new CommandDefinition(
                 "select pwdenc from users where prodkey=@prodkey and username=@username",
                 new { prodkey, username }, cancellationToken: ct));
