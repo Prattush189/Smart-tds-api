@@ -251,6 +251,7 @@ app.MapTdsPayeeEndpoints();
 app.MapSalaryChildEndpoints();
 app.MapPayeeEndpoints();
 app.MapSalaryEndpoints();
+app.MapTracesRequestEndpoints();
 app.MapTdsEntryEndpoints();
 app.MapBackupEndpoints();
 app.MapSupportEndpoints();
