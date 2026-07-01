@@ -1,0 +1,14 @@
+# Migrations already bundled in the base installer (.aip), under _migration\local\migrations\.
+# The API patch packer (pack-api-patch.ps1) ships every migration NOT listed here — i.e. only
+# the ones a fresh .aip install is missing. This covers clients who skip intermediate patches
+# without re-shipping schema the installer already has.
+#
+# WHEN YOU REBUILD THE .aip: if the new installer bundles newer migrations, add their exact
+# filenames here so future patches stop shipping them. Lines starting with # are ignored.
+#
+# Current .aip baseline (verified from the Advanced Installer file list):
+master__0001__rls_tenant_isolation.sql
+master__0002__add_user_pwdenc.sql
+master__0003__support_registry.sql
+master__0004__install_registry.sql
+year__0001__rls_tenant_isolation.sql

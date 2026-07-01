@@ -32,8 +32,9 @@ param(
   [string]   $ApiDist        = (Join-Path $PSScriptRoot "dist\api"),  # published API folder
   [string]   $OutDir         = (Join-Path $PSScriptRoot "dist\patch"),
   [string[]] $ExtraApiFiles  = @(),                  # extra changed files under \api (e.g. a new dep dll)
-  [string[]] $Migrations     = @(),                  # new migration .sql filenames to include
+  [string[]] $Migrations     = @(),                  # explicit .sql names; EMPTY = all in MigrationsDir NOT in the .aip baseline
   [string]   $MigrationsDir  = (Join-Path $PSScriptRoot "migrations"),
+  [string]   $BaselineFile   = (Join-Path $PSScriptRoot "aip-baseline.txt"), # migrations the base .aip already ships (skip these)
   [string[]] $Scripts        = @(),                  # changed _migration\local\*.ps1 to include (e.g. backup-local.ps1)
   [string]   $ScriptsDir     = $PSScriptRoot,        # where those .ps1 live
   [switch]   $RequiresFullInstall,
@@ -80,10 +81,26 @@ if ($Scripts.Count -gt 0) {
     Write-Host "   + _migration\local\$s" -ForegroundColor DarkGray
   }
 }
-# optional new migrations
-if ($Migrations.Count -gt 0) {
+# migrations — ship every migration the base installer (.aip) does NOT already bundle, so a
+# client that skips intermediate patches still receives them (e.g. jumping 1.0.7 -> 1.1.0 must
+# still get master__0005 traces from 1.0.8), WITHOUT re-shipping the foundational schema the
+# .aip already carries. The excluded set lives in aip-baseline.txt (refresh it when you rebuild
+# the .aip). Everything is idempotent + schema_migrations-tracked, so a stray one would no-op.
+$migsToPack = if ($Migrations.Count -gt 0) {
+  $Migrations
+} else {
+  $baseline = @()
+  if (Test-Path $BaselineFile) {
+    $baseline = @(Get-Content $BaselineFile | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith("#") })
+  }
+  @(Get-ChildItem -Path $MigrationsDir -Filter *.sql -File |
+      Sort-Object Name |
+      Select-Object -ExpandProperty Name |
+      Where-Object { $baseline -notcontains $_ })
+}
+if ($migsToPack.Count -gt 0) {
   New-Item -ItemType Directory -Force -Path (Join-Path $stage "_migration\local\migrations") | Out-Null
-  foreach ($m in $Migrations) {
+  foreach ($m in $migsToPack) {
     $src = Join-Path $MigrationsDir $m
     if (-not (Test-Path $src)) { throw "Migration not found - $src" }
     Copy-Item $src (Join-Path $stage "_migration\local\migrations\$m") -Force
