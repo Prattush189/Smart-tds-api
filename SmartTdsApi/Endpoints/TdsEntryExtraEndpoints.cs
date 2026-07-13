@@ -32,8 +32,6 @@ public sealed record BulkIdsRequest
 
 public static class TdsEntryExtraEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     // Whitelist of summable numeric columns. The legacy SQL concatenated the
     // caller-supplied colName straight into `sum(<col>)` (a SQL-injection
     // vector); here we map the BAL property/column name to a known physical
@@ -91,15 +89,14 @@ public static class TdsEntryExtraEndpoints
             int? section,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
             if (!TryResolveColumn(column, out var col))
                 return Results.BadRequest(new { error = $"Unknown or non-summable column '{column}'." });
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 var sql = new System.Text.StringBuilder(
                     $"select coalesce(sum({col}), 0) from tdsentry where subcode = @subCode and ayid = @ayId");
@@ -114,10 +111,7 @@ public static class TdsEntryExtraEndpoints
                 var total = await conn.ExecuteScalarAsync<decimal>(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new ScalarTotalResult { Total = total });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("SumTdsEntryColumn");
 
         // ── GET /api/tdsentries/sumsections?payeeId=&subCode=&ayId=&column=&formType=&sections=1,2,3
@@ -133,8 +127,7 @@ public static class TdsEntryExtraEndpoints
             int? payeeId,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
             if (!TryResolveColumn(column, out var col))
                 return Results.BadRequest(new { error = $"Unknown or non-summable column '{column}'." });
@@ -152,9 +145,9 @@ public static class TdsEntryExtraEndpoints
                 return Results.BadRequest(new { error = "sections must be a comma-separated list of integers." });
             }
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 var sql = new System.Text.StringBuilder(
                     $"select coalesce(sum({col}), 0) from tdsentry where subcode = @subCode and ayid = @ayId");
@@ -169,10 +162,7 @@ public static class TdsEntryExtraEndpoints
                 var total = await conn.ExecuteScalarAsync<decimal>(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new ScalarTotalResult { Total = total });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("SumTdsEntryColumnSections");
 
         // ── GET /api/tdsentries/monthlysum?payeeId=&subCode=&ayId=&section=&column=&formType=&monthYear=MM/yyyy
@@ -190,15 +180,14 @@ public static class TdsEntryExtraEndpoints
             int? payeeId,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
             if (!TryResolveColumn(column, out var col))
                 return Results.BadRequest(new { error = $"Unknown or non-summable column '{column}'." });
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 var sql = new System.Text.StringBuilder(
                     $@"select coalesce(sum({col}), 0) from tdsentry
@@ -216,10 +205,7 @@ public static class TdsEntryExtraEndpoints
                 var total = await conn.ExecuteScalarAsync<decimal>(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new ScalarTotalResult { Total = total });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("MonthlySumTdsEntryColumn");
 
         // ── POST /api/tdsentries/linkchallan  body { chId, ids:[...] }
@@ -230,23 +216,19 @@ public static class TdsEntryExtraEndpoints
             CancellationToken ct,
             LinkChallanRequest req) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
             var ids = req?.Ids ?? System.Array.Empty<int>();
             if (ids.Length == 0) return Results.Ok(new { count = 0 });
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update tdsentry set chid = @chId where id = any(@ids)";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { chId = req!.ChId, ids }, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("LinkChallanTdsEntries");
 
         // ── POST /api/tdsentries/batch  body [ ...entries ]  → bulk insert, returns { ids, count }
@@ -256,14 +238,13 @@ public static class TdsEntryExtraEndpoints
             CancellationToken ct,
             TdsEntryDto[] entries) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
             if (entries is null || entries.Length == 0) return Results.Ok(new { ids = System.Array.Empty<int>(), count = 0 });
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 if (conn is NpgsqlConnection npg && npg.State != System.Data.ConnectionState.Open)
                     await npg.OpenAsync(ct);
 
@@ -313,10 +294,7 @@ public static class TdsEntryExtraEndpoints
                 }
                 tx.Commit();
                 return Results.Ok(new { ids, count = ids.Count });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("BatchInsertTdsEntries");
 
         // ── POST /api/tdsentries/cleardedlater?payeeId=&subCode=&ayId=&section=&formType=
@@ -331,12 +309,11 @@ public static class TdsEntryExtraEndpoints
             int section,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var sql = new System.Text.StringBuilder(
                     @"update tdsentry set tdsdedlater = 0
                       where payeeid = @payeeId and subcode = @subCode and ayid = @ayId and section = @section
@@ -351,10 +328,7 @@ public static class TdsEntryExtraEndpoints
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("ClearCaughtUpTdsDedLater");
 
         // ── DELETE /api/tdsentries/all?subCode=&ayId=&formTypes=24Q,26Q&quarter=0
@@ -369,12 +343,11 @@ public static class TdsEntryExtraEndpoints
             string? formTypes,
             int? quarter) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var sql = new System.Text.StringBuilder(
                     "delete from tdsentry where subcode = @subCode and ayid = @ayId");
                 var param = new DynamicParameters();
@@ -392,10 +365,7 @@ public static class TdsEntryExtraEndpoints
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("DeleteAllTdsEntriesForAy");
 
         // ── DELETE /api/tdsentries/bychallan?chId=&subCode=&ayId=&formType=
@@ -409,12 +379,11 @@ public static class TdsEntryExtraEndpoints
             int ayId,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var sql = new System.Text.StringBuilder(
                     "delete from tdsentry where chid = @chId and subcode = @subCode and ayid = @ayId");
                 var param = new DynamicParameters();
@@ -426,10 +395,7 @@ public static class TdsEntryExtraEndpoints
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("DeleteTdsEntriesByChallan");
 
         // ── DELETE /api/tdsentries/bypayee?payeeId=&subCode=&ayId=
@@ -445,21 +411,17 @@ public static class TdsEntryExtraEndpoints
             int subCode,
             int ayId) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql =
                     "delete from tdsentry where payeeid = @payeeId and subcode = @subCode and ayid = @ayId";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { payeeId, subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("DeleteTdsEntriesByPayee");
 
         // ── POST /api/tdsentries/unlinkchallan?chId=&subCode=&ayId=
@@ -472,21 +434,17 @@ public static class TdsEntryExtraEndpoints
             int subCode,
             int ayId) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql =
                     "update tdsentry set chid = null, datedeposit = null where chid = @chId and subcode = @subCode and ayid = @ayId";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { chId, subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("UnlinkTdsEntriesByChallan");
 
         // ── POST /api/tdsentries/delete-by-ids   body { subCode, ayId, ids:[] }
@@ -494,20 +452,16 @@ public static class TdsEntryExtraEndpoints
         // PG ANY(@Ids) handles any list size in one statement (no 2100-param limit).
         grp.MapPost("/delete-by-ids", async (BulkIdsRequest body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
             if (body?.Ids == null || body.Ids.Length == 0) return Results.Ok(new { count = 0 });
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "delete from tdsentry where subcode = @SubCode and ayid = @AyId and id = ANY(@Ids)";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { body.SubCode, body.AyId, body.Ids }, cancellationToken: ct));
                 return Results.Ok(new { count = affected });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." }); }
+            });
         }).WithName("DeleteTdsEntriesByIds");
     }
 

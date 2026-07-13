@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -100,8 +99,6 @@ public sealed record SalaryRequest(
 
 public static class SalaryEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     public static void MapSalaryEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/salaries").RequireAuthorization();
@@ -113,12 +110,10 @@ public static class SalaryEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
                     select id, subcode, ayid, saltype, nameofemployer, natureofemployment,
                            panofemployer, tanofemployer, countrycode, addrdetail,
@@ -137,15 +132,7 @@ public static class SalaryEndpoints
                 var rows = await conn.QueryAsync<SalaryDto>(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("ListSalaries");
 
         // ------------------------------------------------------------------
@@ -154,12 +141,10 @@ public static class SalaryEndpoints
         // ------------------------------------------------------------------
         grp.MapGet("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 const string sqlSalary = @"
                     select id, subcode, ayid, saltype, nameofemployer, natureofemployment,
@@ -204,15 +189,7 @@ public static class SalaryEndpoints
                     new CommandDefinition(sqlPerq, param, cancellationToken: ct));
 
                 return Results.Ok(new SalaryWithDetailsDto(salary, exempt, nature, perq));
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("GetSalary");
 
         // ------------------------------------------------------------------
@@ -221,12 +198,10 @@ public static class SalaryEndpoints
         // ------------------------------------------------------------------
         grp.MapPost("/", async (SalaryRequest body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var s = body.Salary;
                 if (s is null)
                     return Results.BadRequest(new { error = "Request body must include a 'salary' object." });
@@ -264,15 +239,7 @@ public static class SalaryEndpoints
                 await InsertChildRows(conn, newId, body, ct);
 
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("CreateSalary");
 
         // ------------------------------------------------------------------
@@ -281,12 +248,10 @@ public static class SalaryEndpoints
         // ------------------------------------------------------------------
         grp.MapPut("/{id:int}", async (int id, SalaryRequest body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var s = body.Salary;
 
                 const string sqlUpdate = @"
@@ -344,15 +309,7 @@ public static class SalaryEndpoints
                 await InsertChildRows(conn, id, body, ct);
 
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("UpdateSalary");
 
         // ------------------------------------------------------------------
@@ -361,12 +318,10 @@ public static class SalaryEndpoints
         // ------------------------------------------------------------------
         grp.MapDelete("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition("delete from salary where id = @id",
                         new { id }, cancellationToken: ct));
@@ -375,15 +330,7 @@ public static class SalaryEndpoints
                     return Results.NotFound(new { error = $"Salary id {id} not found." });
 
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("DeleteSalary");
     }
 

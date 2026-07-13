@@ -133,8 +133,7 @@ public static class AdminEndpoints
         // GET /api/users — full rows scoped by JWT prodkey, undeleted only.
         grp.MapGet("/users", async (ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from users where prodkey = @pk and isdeleted = false order by username";
@@ -145,8 +144,7 @@ public static class AdminEndpoints
         // GET /api/users/{username} — single row by PK (prodkey from JWT).
         grp.MapGet("/users/{username}", async (string username, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from users where prodkey = @pk and username = @username";
@@ -161,9 +159,8 @@ public static class AdminEndpoints
         grp.MapGet("/users/{username}/password", async (string username, ClaimsPrincipal principal,
                                 IDbConnectionFactory db, IOptions<JwtOptions> jwt, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
-            if (!IsAdmin(principal)) return Results.Forbid();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
+            if (!Api.IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
             // distinguish "no such user" (404) from "user exists but has no recoverable
@@ -185,9 +182,8 @@ public static class AdminEndpoints
         grp.MapPost("/users", async (UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
                                      IOptions<JwtOptions> jwt, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
-            if (!IsAdmin(principal)) return Results.Forbid();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
+            if (!Api.IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"insert into users (prodkey, {UserColumns})
@@ -211,10 +207,9 @@ public static class AdminEndpoints
         grp.MapPut("/users/{username}", async (string username, UserReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
                                                IOptions<JwtOptions> jwt, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
-            var isAdmin = IsAdmin(principal);
+            var isAdmin = Api.IsAdmin(principal);
             if (!isAdmin)
             {
                 var caller = principal.FindFirstValue(ClaimTypes.NameIdentifier)
@@ -266,9 +261,8 @@ public static class AdminEndpoints
         // DELETE /api/users/{username} — soft delete (prodkey from JWT). ADMIN only.
         grp.MapDelete("/users/{username}", async (string username, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey)) return Results.Unauthorized();
-            if (!IsAdmin(principal)) return Results.Forbid();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
+            if (!Api.IsAdmin(principal)) return Results.Forbid();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "delete from users where prodkey = @prodkey and username = @username";
@@ -276,10 +270,6 @@ public static class AdminEndpoints
             return Results.NoContent();
         }).WithName("DeleteUser");
     }
-
-    // ADMIN gate: usertype claim issued at login (mirrors BackupEndpoints.IsAdmin).
-    private static bool IsAdmin(ClaimsPrincipal user) =>
-        string.Equals(user.FindFirstValue("usertype"), "ADMIN", StringComparison.OrdinalIgnoreCase);
 
     // ──────────────────────────── BANKDETAILS ────────────────────────────
     // Assessee-owned (no prodkey column): scoped by subcode like the legacy.

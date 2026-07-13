@@ -229,9 +229,7 @@ public static class AssesseeEndpoints
         grp.MapGet("/", async (ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct,
             bool includeDeleted = false) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = @"select * from assessee
@@ -245,9 +243,7 @@ public static class AssesseeEndpoints
 
         grp.MapGet("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from assessee where subcode = @subCode and prodkey = @pk";
@@ -260,9 +256,7 @@ public static class AssesseeEndpoints
         grp.MapPost("/", async (AssesseeReq body, ClaimsPrincipal principal, IDbConnectionFactory db,
             Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"insert into assessee (prodkey, {ColumnList})
@@ -270,32 +264,20 @@ public static class AssesseeEndpoints
                          returning subcode";
             var p = ToParams(body);
             p.Add("prodkey", prodkey);
-            try
+            return await Api.Write("Could not save assessee", async () =>
             {
                 var newSubcode = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, p, cancellationToken: ct));
                 // new subcode -> drop the cached subcode list so year-DB RLS sees it at once
                 cache.Remove(SmartTdsApi.Data.DbConnectionFactory.SubcodeCacheKey(prodkey));
                 return Results.Ok(new { id = newSubcode });
-            }
-            catch (Npgsql.PostgresException pe)
-            {
-                return Results.BadRequest(new { error = "Could not save assessee: " + pe.MessageText
-                    + (string.IsNullOrEmpty(pe.ColumnName) ? "" : " [column: " + pe.ColumnName + "]")
-                    + (string.IsNullOrEmpty(pe.Detail) ? "" : " — " + pe.Detail) });
-            }
-            catch (Exception ex)
-            {
-                return Results.BadRequest(new { error = "Could not save assessee: " + ex.Message });
-            }
+            });
         }).WithName("CreateAssessee");
 
         // PUT /api/assessees/{subCode} — update all writable columns for this prodkey.
         grp.MapPut("/{subCode:int}", async (int subCode, AssesseeReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"update assessee set {SetList}
@@ -303,21 +285,11 @@ public static class AssesseeEndpoints
             var p = ToParams(body);
             p.Add("subCode", subCode);
             p.Add("prodkey", prodkey);
-            try
+            return await Api.Write("Could not save assessee", async () =>
             {
                 await conn.ExecuteAsync(new CommandDefinition(sql, p, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (Npgsql.PostgresException pe)
-            {
-                return Results.BadRequest(new { error = "Could not save assessee: " + pe.MessageText
-                    + (string.IsNullOrEmpty(pe.ColumnName) ? "" : " [column: " + pe.ColumnName + "]")
-                    + (string.IsNullOrEmpty(pe.Detail) ? "" : " — " + pe.Detail) });
-            }
-            catch (Exception ex)
-            {
-                return Results.BadRequest(new { error = "Could not save assessee: " + ex.Message });
-            }
+            });
         }).WithName("UpdateAssessee");
 
         // DELETE /api/assessees/{subCode} — hard delete (permanent).
@@ -328,9 +300,7 @@ public static class AssesseeEndpoints
         grp.MapDelete("/{subCode:int}", async (int subCode, ClaimsPrincipal principal, IDbConnectionFactory db,
             Microsoft.Extensions.Caching.Memory.IMemoryCache cache, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             // SOFT delete. The desktop offers "Revert Deleted", which restores rows whose

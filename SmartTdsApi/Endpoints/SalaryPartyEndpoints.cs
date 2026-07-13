@@ -26,8 +26,6 @@ public sealed record SalaryPartyReplaceReq
 
 public static class SalaryPartyEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     public static void MapSalaryPartyEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/salaryparties").RequireAuthorization();
@@ -36,11 +34,10 @@ public static class SalaryPartyEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId, int pcode) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
             try
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"select id, subcode, ayid, pcode, partytype, pan, name
                                      from salaryparty
                                      where subcode = @subCode and ayid = @ayId and pcode = @pcode
@@ -58,12 +55,11 @@ public static class SalaryPartyEndpoints
         // PUT /api/salaryparties — replace ALL rows for (subCode, ayId, pcode): delete then insert.
         grp.MapPut("/", async (SalaryPartyReplaceReq body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
             if (body.subCode <= 0 || body.ayId <= 0 || body.pcode <= 0)
                 return Results.BadRequest(new { error = "subCode, ayId and pcode are required" });
 
-            using var conn = await db.OpenYearAsync(year!, ct);
+            using var conn = await db.OpenYearAsync(year, ct);
             // Atomic replace: if any insert fails after the delete, the whole set rolls back
             // (the `using` disposes -> rolls back unless we reach Commit). The app.subcodes GUC
             // is session-level (set_config(..., false)), so it survives inside the transaction.

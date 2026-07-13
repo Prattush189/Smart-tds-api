@@ -52,8 +52,6 @@ public sealed record PayeeDto
 
 public static class PayeeEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     public static void MapPayeeEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/payees").RequireAuthorization();
@@ -62,12 +60,10 @@ public static class PayeeEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
                     select id, subcode, ayid, tsid, empflag, pan, panstatus, name,
                            add1, add2, add3, add4, city, dob, doj, fname,
@@ -83,26 +79,16 @@ public static class PayeeEndpoints
                 var rows = await conn.QueryAsync<PayeeDto>(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
-            }
+            });
         }).WithName("ListPayees");
 
         // GET /api/payees/{id}
         grp.MapGet("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
                     select id, subcode, ayid, tsid, empflag, pan, panstatus, name,
                            add1, add2, add3, add4, city, dob, doj, fname,
@@ -116,26 +102,16 @@ public static class PayeeEndpoints
                 var row = await conn.QuerySingleOrDefaultAsync<PayeeDto>(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
-            }
+            });
         }).WithName("GetPayee");
 
         // POST /api/payees
         grp.MapPost("/", async (PayeeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
                     insert into payee
                         (subcode, ayid, tsid, empflag, pan, panstatus, name,
@@ -157,26 +133,16 @@ public static class PayeeEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
-            }
+            });
         }).WithName("CreatePayee");
 
         // PUT /api/payees/{id}
         grp.MapPut("/{id:int}", async (int id, PayeeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
                     update payee set
                         subcode      = @SubCode,
@@ -233,39 +199,21 @@ public static class PayeeEndpoints
                         body.DirFlag, body.TaxRegime
                     }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
-            }
+            });
         }).WithName("UpdatePayee");
 
         // DELETE /api/payees/{id}  — hard delete (payee has no isdeleted column)
         grp.MapDelete("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "delete from payee where id = @id";
                 await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}'." });
-            }
+            });
         }).WithName("DeletePayee");
 
         // POST /api/payees/batch  body [ ...payees ]  → bulk INSERT in one round-trip,
@@ -273,13 +221,11 @@ public static class PayeeEndpoints
         // few-hundred-payee file is one request instead of one PUT/POST per payee.
         grp.MapPost("/batch", async (PayeeDto[] body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
             if (body is null || body.Length == 0) return Results.Ok(new { ids = System.Array.Empty<int>(), count = 0 });
-
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 if (conn is NpgsqlConnection npg && npg.State != System.Data.ConnectionState.Open)
                     await npg.OpenAsync(ct);
 
@@ -309,23 +255,18 @@ public static class PayeeEndpoints
                         new CommandDefinition(sql, dto, transaction: tx, cancellationToken: ct)));
                 tx.Commit();
                 return Results.Ok(new { ids, count = ids.Count });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("BatchInsertPayees");
 
         // POST /api/payees/update-batch  body [ ...payees ]  → bulk UPDATE by id in one
         // round-trip, returns { count }. Used by Excel import to refresh existing payees.
         grp.MapPost("/update-batch", async (PayeeDto[] body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
             if (body is null || body.Length == 0) return Results.Ok(new { count = 0 });
-
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 if (conn is NpgsqlConnection npg && npg.State != System.Data.ConnectionState.Open)
                     await npg.OpenAsync(ct);
 
@@ -349,10 +290,7 @@ public static class PayeeEndpoints
                         new CommandDefinition(sql, dto, transaction: tx, cancellationToken: ct));
                 tx.Commit();
                 return Results.Ok(new { count });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("BatchUpdatePayees");
     }
 }

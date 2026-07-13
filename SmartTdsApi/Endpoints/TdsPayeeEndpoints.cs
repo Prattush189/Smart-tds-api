@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -50,8 +49,6 @@ public sealed record TdsPayeeDto
 
 public static class TdsPayeeEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     public static void MapTdsPayeeEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/tdspayee").RequireAuthorization();
@@ -67,12 +64,11 @@ public static class TdsPayeeEndpoints
             int ayId,
             string? formType) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
 
-            try
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 var sql = new System.Text.StringBuilder(
                     @"select
@@ -126,15 +122,7 @@ public static class TdsPayeeEndpoints
                 var rows = await conn.QueryAsync<TdsPayeeDto>(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("ListTdsPayee");
     }
 }

@@ -141,6 +141,7 @@ public sealed record TdsEntriesSectionDto
     public int Limit { get; init; }
     public string? FormName { get; init; }
     public string? NewSection { get; init; }
+    public string? NewCode { get; init; }   // 2025-Act numeric section code (1001-1092), ayId >= 26
 }
 
 public sealed record CheckPeriodDto
@@ -215,11 +216,17 @@ public static class MastersEndpoints
             return Results.Ok(rows);
         }).WithName("ListStates");
 
-        // GET /api/masters/countries
-        grp.MapGet("/countries", async (IDbConnectionFactory db, CancellationToken ct) =>
+        // GET /api/masters/countries?newAct=true
+        // newAct=true -> the 2025-Act Annexure-10 sequential list (countrynew,
+        // Afghanistan=1..286) used by 27Q for ayId >= 26. Default -> the legacy
+        // dialing-code list (country). Payees store the LEGACY code; the FVU
+        // generator translates by name for new-Act returns.
+        grp.MapGet("/countries", async (IDbConnectionFactory db, CancellationToken ct, bool? newAct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "select id, code, name from country order by name";
+            string sql = (newAct == true)
+                ? "select code as id, code, name from countrynew order by name"
+                : "select id, code, name from country order by name";
             var rows = await conn.QueryAsync<CountryDto>(
                 new CommandDefinition(sql, cancellationToken: ct));
             return Results.Ok(rows);
@@ -312,11 +319,16 @@ public static class MastersEndpoints
             return Results.Ok(outp);
         }).WithName("ListAyMaster");
 
-        // GET /api/masters/tdsnatures
-        grp.MapGet("/tdsnatures", async (IDbConnectionFactory db, CancellationToken ct) =>
+        // GET /api/masters/tdsnatures?newAct=true
+        // newAct=true -> the 2025-Act 27Q Nature-of-Remittance list (tdsnaturenew,
+        // Annexure 9 codes 1-19, for ayId >= 26). Default/absent -> the legacy NSDL
+        // list (tdsnature) still used by ayId < 26. Both lists coexist permanently.
+        grp.MapGet("/tdsnatures", async (IDbConnectionFactory db, CancellationToken ct, bool? newAct) =>
         {
             using var conn = await db.OpenMasterAsync(ct);
-            const string sql = "select code, particular from tdsnature";
+            string sql = (newAct == true)
+                ? "select code, particular from tdsnaturenew order by code"
+                : "select code, particular from tdsnature";
             var rows = await conn.QueryAsync<TdsNatureDto>(
                 new CommandDefinition(sql, cancellationToken: ct));
             return Results.Ok(rows);
@@ -385,13 +397,13 @@ public static class MastersEndpoints
             object? param;
             if (!string.IsNullOrWhiteSpace(formName))
             {
-                sql = @"select section, paycode, name, ""limit"", formname, newsection
+                sql = @"select section, paycode, name, ""limit"", formname, newsection, newcode
                         from tdsentriessection where formname = @formName";
                 param = new { formName };
             }
             else
             {
-                sql = @"select section, paycode, name, ""limit"", formname, newsection
+                sql = @"select section, paycode, name, ""limit"", formname, newsection, newcode
                         from tdsentriessection";
                 param = null;
             }

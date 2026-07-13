@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -12,21 +11,6 @@ namespace SmartTdsApi.Endpoints;
 /// </summary>
 public static class CompIncomeEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
-    private static bool TryYear(HttpRequest http, out string year, out IResult error)
-    {
-        if (!http.Headers.TryGetValue(YearHeader, out var v) || string.IsNullOrWhiteSpace(v))
-        {
-            year = null!;
-            error = Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-            return false;
-        }
-        year = v!;
-        error = null!;
-        return true;
-    }
-
     private const string Cols = @"id, subcode, ayid, pcode, salary_id,
         salaryold, salarynew, businessold, businessnew, propertyold, propertynew,
         stcgold, stcgnew, cg20old, cg20new, cg125old, cg125new,
@@ -54,8 +38,8 @@ public static class CompIncomeEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId, int pcode = -1) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {Cols} from tdscompincome
@@ -66,34 +50,28 @@ public static class CompIncomeEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId, pcode }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListTdsCompIncome");
 
         // GET /api/tdscompincome/{id}
         grp.MapGet("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {Cols} from tdscompincome where id = @id";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetTdsCompIncome");
 
         // POST /api/tdscompincome  -> RETURNING id
         grp.MapPost("/", async (TdsCompIncomeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -133,17 +111,14 @@ public static class CompIncomeEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateTdsCompIncome");
 
         // PUT /api/tdscompincome/{id}
         grp.MapPut("/{id:int}", async (int id, TdsCompIncomeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -202,26 +177,20 @@ public static class CompIncomeEndpoints
                 }, cancellationToken: ct));
                 if (affected == 0) return Results.NotFound(new { error = $"TdsCompIncome id {id} not found." });
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateTdsCompIncome");
 
         // DELETE /api/tdscompincome/{id}  — soft delete via isdeleted
         grp.MapDelete("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update tdscompincome set isdeleted = true, modifiedon = now() where id = @id";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("DeleteTdsCompIncome");
     }
 }

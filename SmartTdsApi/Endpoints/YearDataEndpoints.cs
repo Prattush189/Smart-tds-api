@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -13,21 +12,6 @@ namespace SmartTdsApi.Endpoints;
 /// </summary>
 public static class YearDataEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
-    private static bool TryYear(HttpRequest http, out string year, out IResult error)
-    {
-        if (!http.Headers.TryGetValue(YearHeader, out var v) || string.IsNullOrWhiteSpace(v))
-        {
-            year = null!;
-            error = Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-            return false;
-        }
-        year = v!;
-        error = null!;
-        return true;
-    }
-
     public static void MapYearDataEndpoints(this IEndpointRouteBuilder app)
     {
         MapTdsDeductions(app);
@@ -52,8 +36,8 @@ public static class YearDataEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {cols} from tdsdeduction
@@ -63,34 +47,28 @@ public static class YearDataEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListTdsDeductions");
 
         // GET /api/tdsdeductions/{id}
         grp.MapGet("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {cols} from tdsdeduction where id = @id";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetTdsDeduction");
 
         // POST /api/tdsdeductions
         grp.MapPost("/", async (TdsDeductionDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -108,17 +86,14 @@ public static class YearDataEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateTdsDeduction");
 
         // PUT /api/tdsdeductions/{id}
         grp.MapPut("/{id:int}", async (int id, TdsDeductionDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -140,26 +115,20 @@ public static class YearDataEndpoints
                     body.Senior, body.Ssenior, body.Severe, body.Date, body.Salary_id
                 }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateTdsDeduction");
 
         // DELETE /api/tdsdeductions/{id}  — soft delete
         grp.MapDelete("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update tdsdeduction set isdeleted = true, modifiedon = now() where id = @id";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("DeleteTdsDeduction");
     }
 
@@ -177,8 +146,8 @@ public static class YearDataEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {cols} from ddodet
@@ -188,34 +157,28 @@ public static class YearDataEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListDdodet");
 
         // GET /api/ddodet/{tid}
         grp.MapGet("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {cols} from ddodet where tid = @tid";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetDdodet");
 
         // POST /api/ddodet
         grp.MapPost("/", async (DdodetDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -227,17 +190,14 @@ public static class YearDataEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateDdodet");
 
         // PUT /api/ddodet/{tid}
         grp.MapPut("/{tid:int}", async (int tid, DdodetDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -252,26 +212,20 @@ public static class YearDataEndpoints
                     body.Tax, body.Tds, body.Nature, body.Mapcode
                 }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateDdodet");
 
         // DELETE /api/ddodet/{tid}  — soft delete
         grp.MapDelete("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update ddodet set isdeleted = true, modifiedon = now() where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("DeleteDdodet");
     }
 
@@ -289,8 +243,8 @@ public static class YearDataEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {cols} from f15hn
@@ -300,34 +254,28 @@ public static class YearDataEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListF15hn");
 
         // GET /api/f15hn/{tid}
         grp.MapGet("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {cols} from f15hn where tid = @tid";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetF15hn");
 
         // POST /api/f15hn
         grp.MapPost("/", async (F15hnDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -339,17 +287,14 @@ public static class YearDataEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateF15hn");
 
         // PUT /api/f15hn/{tid}
         grp.MapPut("/{tid:int}", async (int tid, F15hnDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -364,26 +309,20 @@ public static class YearDataEndpoints
                     body.Date, body.Nature, body.Section, body.Income, body.Quarter
                 }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateF15hn");
 
         // DELETE /api/f15hn/{tid}  — soft delete
         grp.MapDelete("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update f15hn set isdeleted = true, modifiedon = now() where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("DeleteF15hn");
     }
 
@@ -405,8 +344,8 @@ public static class YearDataEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int? subCode, int? ayId, int? formId) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {cols} from f15hnpayee
@@ -418,34 +357,28 @@ public static class YearDataEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId, formId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListF15hnPayee");
 
         // GET /api/f15hnpayee/{tid}
         grp.MapGet("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {cols} from f15hnpayee where tid = @tid";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetF15hnPayee");
 
         // POST /api/f15hnpayee
         grp.MapPost("/", async (F15hnPayeeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -459,17 +392,14 @@ public static class YearDataEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateF15hnPayee");
 
         // PUT /api/f15hnpayee/{tid}
         grp.MapPut("/{tid:int}", async (int tid, F15hnPayeeDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -487,26 +417,20 @@ public static class YearDataEndpoints
                     body.AmtPaid, body.Layr, body.Type, body.Quarter
                 }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateF15hnPayee");
 
         // DELETE /api/f15hnpayee/{tid}  — soft delete
         grp.MapDelete("/{tid:int}", async (int tid, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "update f15hnpayee set isdeleted = true, modifiedon = now() where tid = @tid";
                 await conn.ExecuteAsync(new CommandDefinition(sql, new { tid }, cancellationToken: ct));
                 return Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("DeleteF15hnPayee");
     }
 }

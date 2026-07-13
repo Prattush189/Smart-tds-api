@@ -90,8 +90,9 @@ public sealed class DbConnectionFactory : IDbConnectionFactory
         return conn;
     }
 
-    /// <summary>"26", "2026", "smarttds26" -> "26". Guards against injection into the DB name.</summary>
-    private static string NormalizeYear(string year)
+    /// <summary>"26", "2026", "smarttds26" -> "26". Guards against injection into the DB name.
+    /// (internal so the unit tests can cover the year-routing edge cases directly)</summary>
+    internal static string NormalizeYear(string year)
     {
         var digits = new string((year ?? "").Where(char.IsDigit).ToArray());
         if (digits.Length == 4) digits = digits.Substring(2); // 2026 -> 26

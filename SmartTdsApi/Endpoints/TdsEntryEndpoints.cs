@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -47,8 +46,6 @@ public sealed record TdsEntryDto
 
 public static class TdsEntryEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
     public static void MapTdsEntryEndpoints(this IEndpointRouteBuilder app)
     {
         var grp = app.MapGroup("/api/tdsentries").RequireAuthorization();
@@ -64,12 +61,10 @@ public static class TdsEntryEndpoints
             int? chId,
             int? payeeId) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
 
                 var sql = new System.Text.StringBuilder(
                     @"select id, payeeid, chid, subcode, ayid,
@@ -105,26 +100,16 @@ public static class TdsEntryEndpoints
                 var rows = await conn.QueryAsync<TdsEntryDto>(
                     new CommandDefinition(sql.ToString(), param, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("ListTdsEntries");
 
         // GET /api/tdsentries/{id}
         grp.MapGet("/{id:int}", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct, int id) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql =
                     @"select id, payeeid, chid, subcode, ayid,
                              payeename, payername, section, nature, descrp,
@@ -140,26 +125,16 @@ public static class TdsEntryEndpoints
                 var row = await conn.QuerySingleOrDefaultAsync<TdsEntryDto>(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("GetTdsEntry");
 
         // POST /api/tdsentries
         grp.MapPost("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct, TdsEntryDto dto) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql =
                     @"insert into tdsentry
                         (payeeid, chid, subcode, ayid,
@@ -223,26 +198,16 @@ public static class TdsEntryEndpoints
                         pCode        = dto.PCode
                     }, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("CreateTdsEntry");
 
         // PUT /api/tdsentries/{id}
         grp.MapPut("/{id:int}", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct, int id, TdsEntryDto dto) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql =
                     @"update tdsentry set
                          payeeid       = @payeeId,
@@ -324,39 +289,21 @@ public static class TdsEntryEndpoints
                         pCode        = dto.PCode
                     }, cancellationToken: ct));
                 return affected == 0 ? Results.NotFound() : Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("UpdateTdsEntry");
 
         // DELETE /api/tdsentries/{id}  — hard delete (no isdeleted column on tdsentry)
         grp.MapDelete("/{id:int}", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct, int id) =>
         {
-            if (!http.Headers.TryGetValue(YearHeader, out var year) || string.IsNullOrWhiteSpace(year))
-                return Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-
-            try
+            if (!Api.TryYear(http, out var year, out var bad)) return bad;
+            return await Api.InYear(year, async () =>
             {
-                using var conn = await db.OpenYearAsync(year!, ct);
+                using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = "delete from tdsentry where id = @id";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return affected == 0 ? Results.NotFound() : Results.NoContent();
-            }
-            catch (ArgumentException ex)
-            {
-                return Results.BadRequest(new { error = ex.Message });
-            }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            {
-                return Results.NotFound(new { error = $"No data for assessment year '{year}' (database not provisioned)." });
-            }
+            });
         }).WithName("DeleteTdsEntry");
     }
 }

@@ -58,7 +58,7 @@ public static class BackupEndpoints
                                IOptions<BackupOptions> opt, CancellationToken ct) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
-            if (!IsAdmin(user)) return Results.Forbid();
+            if (!Api.IsAdmin(user)) return Results.Forbid();
             var o = opt.Value;
             var (code, stdout, stderr) = await RunScript(o, "backup-local.ps1",
                 new[] { "-Label", "manual", "-Keep", o.Keep.ToString() }, ct);
@@ -78,7 +78,7 @@ public static class BackupEndpoints
         grp.MapGet("", (ClaimsPrincipal user, IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
-            if (!IsAdmin(user)) return Results.Forbid();
+            if (!Api.IsAdmin(user)) return Results.Forbid();
             var dir = opt.Value.ResolvedBackupRoot;
             if (!Directory.Exists(dir)) return Results.Ok(Array.Empty<object>());
             var list = new DirectoryInfo(dir).GetFiles("SmartTdsBackup_*.zip")
@@ -92,7 +92,7 @@ public static class BackupEndpoints
                                IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
-            if (!IsAdmin(user)) return Results.Forbid();
+            if (!Api.IsAdmin(user)) return Results.Forbid();
             var path = SafeBackupPath(opt.Value.ResolvedBackupRoot, file);
             if (path is null || !File.Exists(path)) return Results.NotFound();
             return Results.File(path, "application/zip", Path.GetFileName(path));
@@ -107,7 +107,7 @@ public static class BackupEndpoints
                                IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
-            if (!IsAdmin(user)) return Results.Forbid();
+            if (!Api.IsAdmin(user)) return Results.Forbid();
             var o = opt.Value;
             var path = SafeBackupPath(o.ResolvedBackupRoot, file);
             if (path is null || !File.Exists(path)) return Results.NotFound();
@@ -157,7 +157,7 @@ public static class BackupEndpoints
         app.MapPost("/api/migrate", async (ClaimsPrincipal user, IOptions<LicensingOptions> lic, IOptions<BackupOptions> opt, CancellationToken ct) =>
         {
             if (!lic.Value.IsLocal) return OnlineNotSupported();
-            if (!IsAdmin(user)) return Results.Forbid();
+            if (!Api.IsAdmin(user)) return Results.Forbid();
             var (code, stdout, stderr) = await RunScript(opt.Value, "migrate-local.ps1", Array.Empty<string>(), ct);
             if (code != 0) return Results.Problem("Migrate failed: " + Tail(stderr + stdout), statusCode: 500);
             return Results.Ok(new { ok = true, output = Tail(stdout, 1000) });
@@ -187,9 +187,6 @@ public static class BackupEndpoints
 
     private static IResult OnlineNotSupported() =>
         Results.Problem("Backups are managed server-side in Online mode.", statusCode: 400);
-
-    private static bool IsAdmin(ClaimsPrincipal user) =>
-        string.Equals(user.FindFirstValue("usertype"), "ADMIN", StringComparison.OrdinalIgnoreCase);
 
     // fire a short-lived helper (schtasks) and wait briefly; used to launch the
     // detached restore task. Best-effort: never throws into the request.

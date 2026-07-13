@@ -1,5 +1,4 @@
 using Dapper;
-using Npgsql;
 using SmartTdsApi.Data;
 
 namespace SmartTdsApi.Endpoints;
@@ -14,21 +13,6 @@ namespace SmartTdsApi.Endpoints;
 /// </summary>
 public static class FilingStatusEndpoints
 {
-    private const string YearHeader = "X-Assessment-Year";
-
-    private static bool TryYear(HttpRequest http, out string year, out IResult error)
-    {
-        if (!http.Headers.TryGetValue(YearHeader, out var v) || string.IsNullOrWhiteSpace(v))
-        {
-            year = null!;
-            error = Results.BadRequest(new { error = $"{YearHeader} header is required (e.g. '26')" });
-            return false;
-        }
-        year = v!;
-        error = null!;
-        return true;
-    }
-
     private const string Cols = @"id, subcode, ayid,
         f241r, f241d, f242r, f242d, f243r, f243d, f244r, f244d,
         f261r, f261d, f262r, f262d, f263r, f263d, f264r, f264d,
@@ -43,8 +27,8 @@ public static class FilingStatusEndpoints
         grp.MapGet("/", async (HttpRequest http, IDbConnectionFactory db, CancellationToken ct,
             int subCode, int ayId) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $@"select {Cols} from filingstatus
@@ -53,34 +37,28 @@ public static class FilingStatusEndpoints
                 var rows = await conn.QueryAsync(
                     new CommandDefinition(sql, new { subCode, ayId }, cancellationToken: ct));
                 return Results.Ok(rows);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("ListFilingStatus");
 
         // GET /api/filingstatus/{id}
         grp.MapGet("/{id:int}", async (int id, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 var sql = $"select {Cols} from filingstatus where id = @id";
                 var row = await conn.QuerySingleOrDefaultAsync(
                     new CommandDefinition(sql, new { id }, cancellationToken: ct));
                 return row is null ? Results.NotFound() : Results.Ok(row);
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("GetFilingStatus");
 
         // POST /api/filingstatus — insert, returns { id }.
         grp.MapPost("/", async (FilingStatusDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -100,17 +78,14 @@ public static class FilingStatusEndpoints
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("CreateFilingStatus");
 
         // PUT /api/filingstatus/{id}
         grp.MapPut("/{id:int}", async (int id, FilingStatusDto body, HttpRequest http, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            if (!TryYear(http, out var year, out var err)) return err;
-            try
+            if (!Api.TryYear(http, out var year, out var err)) return err;
+            return await Api.InYear(year, async () =>
             {
                 using var conn = await db.OpenYearAsync(year, ct);
                 const string sql = @"
@@ -135,10 +110,7 @@ public static class FilingStatusEndpoints
                     body.tcs1r, body.tcs1d, body.tcs2r, body.tcs2d, body.tcs3r, body.tcs3d, body.tcs4r, body.tcs4d
                 }, cancellationToken: ct));
                 return affected == 0 ? Results.NotFound() : Results.NoContent();
-            }
-            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
-            catch (PostgresException pe) when (pe.SqlState == "3D000")
-            { return Results.NotFound(new { error = $"No data for assessment year '{year}'." }); }
+            });
         }).WithName("UpdateFilingStatus");
     }
 }

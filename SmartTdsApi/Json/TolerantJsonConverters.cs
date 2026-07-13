@@ -61,8 +61,11 @@ internal static class Tolerant
                 var s = r.GetString();
                 if (string.IsNullOrWhiteSpace(s)) return null;
                 s = s.Trim();
-                if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var p)) return p;
+                // Explicit formats FIRST: the desktop sends dd-MM-yyyy, but invariant
+                // TryParse reads "01-04-2026" as MM-dd (Jan 4) — so letting it run first
+                // silently swapped day/month for every ambiguous date (day <= 12).
                 if (DateTime.TryParseExact(s, DateFormats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var pe)) return pe;
+                if (DateTime.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.None, out var p)) return p;
                 return null;
             case JsonTokenType.StartObject:
             case JsonTokenType.StartArray:

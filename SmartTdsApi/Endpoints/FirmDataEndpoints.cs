@@ -115,9 +115,7 @@ public static class FirmDataEndpoints
         // GET /api/consultants — full rows scoped by JWT prodkey
         grp.MapGet("/consultants", async (ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from consultant where prodkey = @pk and isdeleted = false order by name";
@@ -129,9 +127,7 @@ public static class FirmDataEndpoints
         // GET /api/groups — full rows scoped by JWT prodkey
         grp.MapGet("/groups", async (ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from groups where prodkey = @pk and isdeleted = false order by groupname";
@@ -145,9 +141,7 @@ public static class FirmDataEndpoints
         // GET /api/consultants/{id}
         grp.MapGet("/consultants/{id:int}", async (int id, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from consultant where conscode = @id and prodkey = @pk";
@@ -159,9 +153,7 @@ public static class FirmDataEndpoints
         // POST /api/consultants — prodkey from JWT; returns { id }.
         grp.MapPost("/consultants", async (ConsultantReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"insert into consultant (prodkey, {ConsultantColumns})
@@ -177,9 +169,7 @@ public static class FirmDataEndpoints
         // PUT /api/consultants/{id}
         grp.MapPut("/consultants/{id:int}", async (int id, ConsultantReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"update consultant set {ConsultantSet}
@@ -194,9 +184,7 @@ public static class FirmDataEndpoints
         // DELETE /api/consultants/{id} — soft delete.
         grp.MapDelete("/consultants/{id:int}", async (int id, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "delete from consultant where conscode = @id and prodkey = @prodkey";
@@ -210,9 +198,7 @@ public static class FirmDataEndpoints
         // GET /api/groups/{id}
         grp.MapGet("/groups/{id:int}", async (int id, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "select * from groups where grpcode = @id and prodkey = @pk";
@@ -224,9 +210,7 @@ public static class FirmDataEndpoints
         // POST /api/groups — prodkey from JWT; returns { id }.
         grp.MapPost("/groups", async (GroupReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"insert into groups (prodkey, {GroupColumns})
@@ -242,9 +226,7 @@ public static class FirmDataEndpoints
         // PUT /api/groups/{id}
         grp.MapPut("/groups/{id:int}", async (int id, GroupReq body, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             var sql = $@"update groups set {GroupSet}
@@ -259,9 +241,7 @@ public static class FirmDataEndpoints
         // DELETE /api/groups/{id} — soft delete.
         grp.MapDelete("/groups/{id:int}", async (int id, ClaimsPrincipal principal, IDbConnectionFactory db, CancellationToken ct) =>
         {
-            var prodkey = principal.FindFirstValue("prodkey");
-            if (string.IsNullOrEmpty(prodkey))
-                return Results.Unauthorized();
+            if (Api.Prodkey(principal) is not { } prodkey) return Results.Unauthorized();
 
             using var conn = await db.OpenMasterAsync(ct);
             const string sql = "delete from groups where grpcode = @id and prodkey = @prodkey";
