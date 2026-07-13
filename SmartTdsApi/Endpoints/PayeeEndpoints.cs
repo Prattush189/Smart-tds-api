@@ -48,6 +48,8 @@ public sealed record PayeeDto
     public int? State { get; init; }
     public bool? DirFlag { get; init; }
     public string? TaxRegime { get; init; }
+    public bool? Sr194p { get; init; }     // specified senior citizen u/s 194P -> 24Q section 1032
+    public bool? PeInIndia { get; init; }  // NR collectee has a PE in India -> 27EQ DD field 13
 }
 
 public static class PayeeEndpoints
@@ -71,7 +73,7 @@ public static class PayeeEndpoints
                            usercode, empdesig, stcode, dol, dor, leaves,
                            email, email2, panstat, flag206abcca, flag115bac,
                            freezepan, sex, status, rstatus, country, state,
-                           dirflag, taxregime
+                           dirflag, taxregime, sr194p, peinindia
                     from payee
                     where subcode = @subCode
                       and ayid = @ayId
@@ -96,7 +98,7 @@ public static class PayeeEndpoints
                            usercode, empdesig, stcode, dol, dor, leaves,
                            email, email2, panstat, flag206abcca, flag115bac,
                            freezepan, sex, status, rstatus, country, state,
-                           dirflag, taxregime
+                           dirflag, taxregime, sr194p, peinindia
                     from payee
                     where id = @id";
                 var row = await conn.QuerySingleOrDefaultAsync<PayeeDto>(
@@ -120,7 +122,7 @@ public static class PayeeEndpoints
                          usercode, empdesig, stcode, dol, dor, leaves,
                          email, email2, panstat, flag206abcca, flag115bac,
                          freezepan, sex, status, rstatus, country, state,
-                         dirflag, taxregime)
+                         dirflag, taxregime, sr194p, peinindia)
                     values
                         (@SubCode, @AyId, @TsId, @EmpFlag, @Pan, @PanStatus, @Name,
                          @Add1, @Add2, @Add3, @Add4, @City, @DoB, @DoJ, @FName,
@@ -128,7 +130,7 @@ public static class PayeeEndpoints
                          @UserCode, @EmpDesig, @StCode, @DoL, @DoR, @Leaves,
                          @Email, @Email2, @PanStat, @Flag206ABCCA, @Flag115BAC,
                          @FreezePan, @Sex, @Status, @RStatus, @Country, @State,
-                         @DirFlag, @TaxRegime)
+                         @DirFlag, @TaxRegime, coalesce(@Sr194p, false), coalesce(@PeInIndia, false))
                     returning id";
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, body, cancellationToken: ct));
@@ -184,7 +186,9 @@ public static class PayeeEndpoints
                         country      = @Country,
                         state        = @State,
                         dirflag      = @DirFlag,
-                        taxregime    = @TaxRegime
+                        taxregime    = @TaxRegime,
+                        sr194p       = coalesce(@Sr194p, false),
+                        peinindia    = coalesce(@PeInIndia, false)
                     where id = @id";
                 await conn.ExecuteAsync(
                     new CommandDefinition(sql, new
@@ -196,7 +200,7 @@ public static class PayeeEndpoints
                         body.UserCode, body.EmpDesig, body.StCode, body.DoL, body.DoR, body.Leaves,
                         body.Email, body.Email2, body.PanStat, body.Flag206ABCCA, body.Flag115BAC,
                         body.FreezePan, body.Sex, body.Status, body.RStatus, body.Country, body.State,
-                        body.DirFlag, body.TaxRegime
+                        body.DirFlag, body.TaxRegime, body.Sr194p, body.PeInIndia
                     }, cancellationToken: ct));
                 return Results.NoContent();
             });
@@ -237,7 +241,7 @@ public static class PayeeEndpoints
                          usercode, empdesig, stcode, dol, dor, leaves,
                          email, email2, panstat, flag206abcca, flag115bac,
                          freezepan, sex, status, rstatus, country, state,
-                         dirflag, taxregime)
+                         dirflag, taxregime, sr194p, peinindia)
                     values
                         (@SubCode, @AyId, @TsId, @EmpFlag, @Pan, @PanStatus, @Name,
                          @Add1, @Add2, @Add3, @Add4, @City, @DoB, @DoJ, @FName,
@@ -245,7 +249,7 @@ public static class PayeeEndpoints
                          @UserCode, @EmpDesig, @StCode, @DoL, @DoR, @Leaves,
                          @Email, @Email2, @PanStat, @Flag206ABCCA, @Flag115BAC,
                          @FreezePan, @Sex, @Status, @RStatus, @Country, @State,
-                         @DirFlag, @TaxRegime)
+                         @DirFlag, @TaxRegime, coalesce(@Sr194p, false), coalesce(@PeInIndia, false))
                     returning id";
 
                 using var tx = conn.BeginTransaction();
