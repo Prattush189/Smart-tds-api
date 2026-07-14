@@ -8,7 +8,7 @@
          ApiUpdater) compares this (read from the installed SmartTdsApi.dll
          FileVersion) against the remote api-version.json manifest. BUMP THIS
          on every API release that you intend to ship as a patch. -->
-    <Version>1.1.5</Version>
+    <Version>1.1.6</Version>
   </PropertyGroup>
 
   <ItemGroup>
