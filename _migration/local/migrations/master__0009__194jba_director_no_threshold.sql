@@ -1,0 +1,34 @@
+-- master__0009__194jba_director_no_threshold.sql
+-- CORRECTION to master__0007: paycode 123 must have NO threshold.
+--
+-- WHAT WENT WRONG
+--   master__0007 line "UPDATE ... limit = 50000 ... paycode = 123  -- 194J(ba) royalty"
+--   mislabelled paycode 123 as royalty and stamped it with the 194J 50,000/FY
+--   threshold. Paycode 123 is NOT royalty - master__0005 defines it as
+--   194J(ba) / new-Act 393(1) [Table: Sl. No. 6(iii).D(b)], code 1028:
+--   "Remuneration / fees / commission to a director of a company".
+--
+-- WHY IT IS WRONG
+--   The 194J threshold proviso covers only professional fees (a), technical
+--   fees (b), royalty (c) and non-compete (d) - clause (ba), a director's
+--   non-salary remuneration (sitting fees / commission), is deliberately
+--   EXCLUDED. TDS @10% applies from the FIRST RUPEE, with no threshold.
+--   Carried forward unchanged by the Income-tax Act 2025: under Sl. No.
+--   6(iii).D, technical (1026) and professional (1027) keep the 50,000
+--   threshold; director's payments (1028) have none.
+--   => 50,000 caused UNDER-DEDUCTION on every director paid < 50,000/FY
+--      (e.g. 5,000 quarterly sitting fees = 20,000/yr -> deducted nothing;
+--      should deduct 500/quarter). Exposes the deductor to 30% expense
+--      disallowance + 1%/month interest + penalty.
+--
+-- FIX: limit = 0. FrmTdsEntry's standard path tests `aggregate > limit`, so 0
+-- means "deduct from the first rupee" - the same convention already used for
+-- non-Individual dividend and non-Ind/HUF 194O (see ApplyThresholdOverride).
+-- The rate rows are already correct (master__0005: 10% for tsid 1/2/5).
+--
+-- The "limit" column is NOT year-scoped. That is correct here: clause (ba)
+-- never had a threshold under the 1961 Act either, so legacy years want 0 too.
+-- Idempotent.
+
+UPDATE tdsentriessection SET "limit" = 0
+WHERE formname = '26Q' AND paycode = 123 AND "limit" <> 0;
