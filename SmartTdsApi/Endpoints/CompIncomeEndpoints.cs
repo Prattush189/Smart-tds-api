@@ -23,7 +23,7 @@ public static class CompIncomeEndpoints
         totaltaxold, totaltaxnew, rebate87aold, rebate87anew,
         surchargeold, surchargenew, cessold, cessnew,
         taxpayableold, taxpayablenew, reliefold, reliefnew, nettaxold, nettaxnew,
-        adoptedmethod, adoptedtax,
+        adoptedmethod, adoptedtax, cert197,
         prevempsalary, prevemptds, prevempbasic,
         tds192_2b, tax192_1a, modifiedon, isdeleted";
 
@@ -88,7 +88,7 @@ public static class CompIncomeEndpoints
                         totaltaxold, totaltaxnew, rebate87aold, rebate87anew,
                         surchargeold, surchargenew, cessold, cessnew,
                         taxpayableold, taxpayablenew, reliefold, reliefnew, nettaxold, nettaxnew,
-                        adoptedmethod, adoptedtax,
+                        adoptedmethod, adoptedtax, cert197,
                         prevempsalary, prevemptds, prevempbasic,
                         tds192_2b, tax192_1a, modifiedon, isdeleted)
                     values (
@@ -104,7 +104,7 @@ public static class CompIncomeEndpoints
                         @TotalTaxOld, @TotalTaxNew, @Rebate87AOld, @Rebate87ANew,
                         @SurchargeOld, @SurchargeNew, @CessOld, @CessNew,
                         @TaxPayableOld, @TaxPayableNew, @ReliefOld, @ReliefNew, @NetTaxOld, @NetTaxNew,
-                        @AdoptedMethod, @AdoptedTax,
+                        @AdoptedMethod, @AdoptedTax, @Cert197,
                         @PrevEmpSalary, @PrevEmpTds, @PrevEmpBasic,
                         @Tds192_2B, @Tax192_1A, now(), false)
                     returning id";
@@ -150,7 +150,7 @@ public static class CompIncomeEndpoints
                         taxpayableold = @TaxPayableOld, taxpayablenew = @TaxPayableNew,
                         reliefold = @ReliefOld, reliefnew = @ReliefNew,
                         nettaxold = @NetTaxOld, nettaxnew = @NetTaxNew,
-                        adoptedmethod = @AdoptedMethod, adoptedtax = @AdoptedTax,
+                        adoptedmethod = @AdoptedMethod, adoptedtax = @AdoptedTax, cert197 = @Cert197,
                         prevempsalary = @PrevEmpSalary, prevemptds = @PrevEmpTds, prevempbasic = @PrevEmpBasic,
                         tds192_2b = @Tds192_2B, tax192_1a = @Tax192_1A, modifiedon = now()
                     where id = @id";
@@ -171,7 +171,7 @@ public static class CompIncomeEndpoints
                     body.TotalTaxOld, body.TotalTaxNew, body.Rebate87AOld, body.Rebate87ANew,
                     body.SurchargeOld, body.SurchargeNew, body.CessOld, body.CessNew,
                     body.TaxPayableOld, body.TaxPayableNew, body.ReliefOld, body.ReliefNew,
-                    body.NetTaxOld, body.NetTaxNew, body.AdoptedMethod, body.AdoptedTax,
+                    body.NetTaxOld, body.NetTaxNew, body.AdoptedMethod, body.AdoptedTax, body.Cert197,
                     body.PrevEmpSalary, body.PrevEmpTds, body.PrevEmpBasic,
                     body.Tds192_2B, body.Tax192_1A
                 }, cancellationToken: ct));
@@ -263,6 +263,7 @@ public sealed record TdsCompIncomeDto
 
     public string? AdoptedMethod { get; init; }
     public double AdoptedTax { get; init; }
+    public string? Cert197 { get; init; }
 
     public double PrevEmpSalary { get; init; }
     public double PrevEmpTds { get; init; }

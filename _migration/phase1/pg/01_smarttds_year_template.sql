@@ -285,6 +285,7 @@ CREATE TABLE tdscompincome (
     reliefold       numeric(14,2) DEFAULT 0,  reliefnew       numeric(14,2) DEFAULT 0,
     nettaxold       numeric(14,2) DEFAULT 0,  nettaxnew       numeric(14,2) DEFAULT 0,
     adoptedmethod   varchar(20) DEFAULT 'AUTOMATIC',
+    cert197         varchar(26),
     adoptedtax      numeric(14,2) DEFAULT 0,
     prevempsalary   numeric(14,2) DEFAULT 0,
     prevemptds      numeric(14,2) DEFAULT 0,
@@ -360,5 +361,8 @@ CREATE TABLE tdsentry (
     chinterest  numeric(14,2),
     chtdsdep    numeric(14,2),
     deductioncode varchar(100),
-    pcode       integer DEFAULT 0
+    pcode       integer DEFAULT 0,
+    liable394   varchar(1),
+    challan394  varchar(10),
+    datepay394  varchar(10)
 );

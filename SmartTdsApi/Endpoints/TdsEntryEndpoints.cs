@@ -42,6 +42,9 @@ public sealed record TdsEntryDto
     public decimal? ChTdsDep { get; init; }
     public string? DeductionCode { get; init; }
     public int? PCode { get; init; }
+    public string? Liable394 { get; init; }
+    public string? Challan394 { get; init; }
+    public string? DatePay394 { get; init; }
 }
 
 public static class TdsEntryEndpoints
@@ -75,7 +78,8 @@ public static class TdsEntryEndpoints
                              formtype, tdsapp, ack15ca, certno,
                              dtvalf, dtvalt, dtpaying, dtcomm,
                              evalid, actualtds, actualrate,
-                             chinterest, chtdsdep, deductioncode, pcode
+                             chinterest, chtdsdep, deductioncode, pcode,
+                             liable394, challan394, datepay394
                       from tdsentry
                       where subcode = @subCode and ayid = @ayId");
 
@@ -119,7 +123,8 @@ public static class TdsEntryEndpoints
                              formtype, tdsapp, ack15ca, certno,
                              dtvalf, dtvalt, dtpaying, dtcomm,
                              evalid, actualtds, actualrate,
-                             chinterest, chtdsdep, deductioncode, pcode
+                             chinterest, chtdsdep, deductioncode, pcode,
+                             liable394, challan394, datepay394
                       from tdsentry
                       where id = @id";
                 var row = await conn.QuerySingleOrDefaultAsync<TdsEntryDto>(
@@ -145,7 +150,8 @@ public static class TdsEntryEndpoints
                          formtype, tdsapp, ack15ca, certno,
                          dtvalf, dtvalt, dtpaying, dtcomm,
                          evalid, actualtds, actualrate,
-                         chinterest, chtdsdep, deductioncode, pcode)
+                         chinterest, chtdsdep, deductioncode, pcode,
+                         liable394, challan394, datepay394)
                       values
                         (@payeeId, @chId, @subCode, @ayId,
                          @payeeName, @payerName, @section, @nature, @descrp,
@@ -155,7 +161,8 @@ public static class TdsEntryEndpoints
                          @formType, @tdsApp, @ack15Ca, @certNo,
                          @dtValF, @dtValT, @dtPaying, @dtComm,
                          @eValid, @actualTds, @actualRate,
-                         @chInterest, @chTdsDep, @deductionCode, @pCode)
+                         @chInterest, @chTdsDep, @deductionCode, @pCode,
+                         @liable394, @challan394, @datePay394)
                       returning id";
                 var newId = await conn.ExecuteScalarAsync<int>(
                     new CommandDefinition(sql, new
@@ -195,7 +202,10 @@ public static class TdsEntryEndpoints
                         chInterest   = dto.ChInterest,
                         chTdsDep     = dto.ChTdsDep,
                         deductionCode = dto.DeductionCode,
-                        pCode        = dto.PCode
+                        pCode        = dto.PCode,
+                        liable394    = dto.Liable394,
+                        challan394   = dto.Challan394,
+                        datePay394   = dto.DatePay394
                     }, cancellationToken: ct));
                 return Results.Ok(new { id = newId });
             });
@@ -245,7 +255,10 @@ public static class TdsEntryEndpoints
                          chinterest    = @chInterest,
                          chtdsdep      = @chTdsDep,
                          deductioncode = @deductionCode,
-                         pcode         = @pCode
+                         pcode         = @pCode,
+                         liable394     = @liable394,
+                         challan394    = @challan394,
+                         datepay394    = @datePay394
                       where id = @id";
                 var affected = await conn.ExecuteAsync(
                     new CommandDefinition(sql, new
@@ -286,7 +299,10 @@ public static class TdsEntryEndpoints
                         chInterest   = dto.ChInterest,
                         chTdsDep     = dto.ChTdsDep,
                         deductionCode = dto.DeductionCode,
-                        pCode        = dto.PCode
+                        pCode        = dto.PCode,
+                        liable394    = dto.Liable394,
+                        challan394   = dto.Challan394,
+                        datePay394   = dto.DatePay394
                     }, cancellationToken: ct));
                 return affected == 0 ? Results.NotFound() : Results.NoContent();
             });
